@@ -146,7 +146,14 @@ def run(inputs: RunInputs, cfg: Config) -> tuple[Setlist, Path]:
 
     # 5. resolve ----------------------------------------------------------------------------
     step("Resolving evidence into a setlist")
-    entries = resolve(evidence, duration=duration, max_contenders=cfg.identify.max_contenders)
+    rejected: list[Entry] = []
+    entries = resolve(
+        evidence,
+        duration=duration,
+        max_contenders=cfg.identify.max_contenders,
+        min_confidence=cfg.output.min_confidence_to_name,
+        rejected=rejected,
+    )
     suggest_from_history(entries, evidence, history, unplaced, cfg.identify.max_contenders)
 
     # 6. enrich -----------------------------------------------------------------------------
@@ -162,6 +169,7 @@ def run(inputs: RunInputs, cfg: Config) -> tuple[Setlist, Path]:
         duration=duration,
         entries=entries,
         offset_note=offset_note,
+        rejected=rejected,
     )
     named = [e.track for e in entries if not e.is_unknown]
     unplaced = [t for t in unplaced if not any(same_track(t, n) for n in named)]

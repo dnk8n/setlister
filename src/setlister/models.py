@@ -93,5 +93,6 @@ class Setlist(BaseModel):
     title: str = ""
     duration: float | None = None
     entries: list[Entry] = []
+    rejected: list[Entry] = []  # detections too weak for the list (shown separately)
     offset_note: str | None = None  # how the online version maps onto the original
     generated_by: str = "setlister"

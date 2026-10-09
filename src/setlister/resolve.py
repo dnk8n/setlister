@@ -5,6 +5,8 @@ Rules, in plain words:
   * When two different tracks claim the same stretch, the more confident one wins and the
     other becomes a "contender" for that stretch.
   * Overlapping neighbours (a DJ transition) are split at the middle of the overlap.
+  * Detections spanning a minute or less are heavily penalised (DJs rarely play a track that
+    briefly), and named rows that end up below `min_confidence` are left out of the list.
   * A gap of more than `min_gap` seconds that nothing explains becomes an "ID" row, listing
     whatever weak guesses fell inside it.
   * DJ software histories are chronological, so placements of history tracks must keep that
@@ -18,6 +20,9 @@ from setlister.textnorm import norm, similarity
 
 SAME_TRACK = 0.8
 MIN_ROW_SECONDS = 20.0
+SHORT_PLAY = 60.0  # seconds; a detection this short is heavily penalised
+SHORT_PLAY_FULL = 120.0  # no penalty from here on
+SHORT_PLAY_FACTOR = 0.3
 
 
 def same_track(a: TrackRef, b: TrackRef) -> bool:
@@ -76,7 +81,11 @@ def resolve(
     duration: float | None,
     min_gap: float = 75.0,
     max_contenders: int = 3,
+    min_confidence: float = 0.5,
+    rejected: list[Entry] | None = None,
 ) -> list[Entry]:
+    """Evidence -> setlist rows. Named rows below `min_confidence` (after the short-play
+    penalty) are left out of the list and appended to `rejected`, if given."""
     timed = [e for e in evidence if e.start is not None]
     timed.sort(key=lambda e: e.confidence, reverse=True)
     entries: list[Entry] = []
@@ -114,6 +123,13 @@ def resolve(
                 )
             )
 
+    for entry in entries:
+        entry.confidence = round(entry.confidence * short_play_factor(entry, duration), 3)
+    dropped = [e for e in entries if e.confidence < min_confidence]
+    entries = [e for e in entries if e.confidence >= min_confidence]
+    if rejected is not None:
+        rejected.extend(sorted(dropped, key=lambda x: x.start))
+
     entries.sort(key=lambda x: x.start)
     _split_transitions(entries)
     entries = _fill_gaps(entries, duration, min_gap)
@@ -129,6 +145,22 @@ def resolve(
     for entry in entries:
         entry.contenders = entry.contenders[:max_contenders]
     return entries
+
+
+def short_play_factor(entry: Entry, duration: float | None) -> float:
+    """DJs rarely play a track for a minute or less, so a detection that short is probably a
+    mismatch: x0.3 at <= 60 s, rising linearly to x1 at 2 min. Rows touching the start or end
+    of the recording are exempt, because the recording may have cut the play short."""
+    end = entry.end if entry.end is not None else entry.start + 60
+    at_edge = entry.start <= 5 or (duration is not None and end >= duration - 5)
+    span = end - entry.start
+    if at_edge or span >= SHORT_PLAY_FULL:
+        return 1.0
+    if span <= SHORT_PLAY:
+        return SHORT_PLAY_FACTOR
+    return SHORT_PLAY_FACTOR + (1 - SHORT_PLAY_FACTOR) * (span - SHORT_PLAY) / (
+        SHORT_PLAY_FULL - SHORT_PLAY
+    )
 
 
 def _drop_slivers(entries: list[Entry], min_len: float = MIN_ROW_SECONDS) -> list[Entry]:

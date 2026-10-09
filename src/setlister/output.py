@@ -24,6 +24,11 @@ def slug(text: str) -> str:
     return re.sub(r"[\s_-]+", "-", s)[:60] or "set"
 
 
+def short_label(entry: Entry) -> str:
+    """For the paste-ready list: a name, or a plain ID. Guesses live in tracklist.md."""
+    return "ID" if entry.is_unknown else entry.track.display
+
+
 def label(entry: Entry, min_conf: float) -> str:
     if entry.is_unknown:
         if entry.contenders:
@@ -39,11 +44,11 @@ def description_text(sl: Setlist, min_conf: float) -> str:
     hours = bool(sl.duration and sl.duration >= 3600)
     lines = ["Tracklist:"]
     for e in sl.entries:
-        lines.append(f"{format_timestamp(e.start, force_hours=hours)} {label(e, min_conf)}")
+        lines.append(f"{format_timestamp(e.start, force_hours=hours)} {short_label(e)}")
     lines += [
         "",
         "Tracklist by setlister (https://github.com/dnk8n/setlister). "
-        "'ID?' = best guesses, corrections welcome.",
+        "ID = not identified yet; corrections welcome.",
     ]
     return "\n".join(lines) + "\n"
 
@@ -84,6 +89,21 @@ def markdown(sl: Setlist, min_conf: float) -> str:
                 out += ["<sub>Sources: " + ", ".join(e.note_sources) + "</sub>", ""]
         if e.contenders and not e.is_unknown and e.confidence >= min_conf:
             out += ["Other candidates: " + "; ".join(c.display for c in e.contenders), ""]
+    if sl.rejected:
+        out += [
+            "## Low-confidence detections (left out of the tracklist)",
+            "",
+            "Probably mismatches (e.g. heard for a minute or less); listed for checking.",
+            "",
+        ]
+        for e in sl.rejected:
+            end = f"–{format_timestamp(e.end, force_hours=hours)}" if e.end else ""
+            srcs = ", ".join(x.value for x in e.sources)
+            out.append(
+                f"- {format_timestamp(e.start, force_hours=hours)}{end} {e.track.display} "
+                f"({e.confidence:.0%}, {srcs})"
+            )
+        out.append("")
     return "\n".join(out)
 
 

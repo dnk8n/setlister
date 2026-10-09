@@ -51,12 +51,34 @@ def test_pick_in_order_rejects_out_of_order_placements():
     assert [e.track.title for e in chosen] == ["2", "3"]
 
 
-def test_description_text_has_zero_start_and_id_guesses():
-    entries = resolve([ev("A", "One", 20, 300, 0.9), ev("B", "Two", 300, 600, 0.3)], duration=600)
+def test_low_confidence_rows_are_left_out_of_the_list():
+    rejected = []
+    entries = resolve(
+        [ev("A", "One", 20, 300, 0.9), ev("B", "Two", 300, 600, 0.3)],
+        duration=600,
+        rejected=rejected,
+    )
     text = description_text(Setlist(url="u", entries=entries, duration=600), min_conf=0.5)
     lines = text.splitlines()
     assert lines[1].startswith("00:00 A - One")
-    assert "ID? (B - Two)" in lines[2]
+    assert lines[2] == "05:00 ID"
+    assert "Two" not in text and [r.track.title for r in rejected] == ["Two"]
+
+
+def test_short_plays_are_penalised_except_at_the_edges():
+    rejected = []
+    entries = resolve(
+        [
+            ev("Edge", "Cut", 0, 50, 0.9),  # cut off by the recording start: kept
+            ev("A", "One", 50, 400, 0.9),
+            ev("Brief", "Blip", 400, 440, 0.9),  # 40 s mid-set: x0.3 -> dropped
+            ev("B", "Two", 440, 800, 0.9),
+        ],
+        duration=800,
+        rejected=rejected,
+    )
+    assert [e.track.title for e in entries] == ["Cut", "One", "Two"]
+    assert rejected[0].track.title == "Blip" and rejected[0].confidence < 0.5
 
 
 def test_same_track_tolerates_accents_and_extra_credits():
@@ -71,7 +93,7 @@ def test_same_track_tolerates_accents_and_extra_credits():
 def test_zero_length_rows_are_folded_into_neighbours():
     entries = resolve(
         [
-            ev("Label", "Sliver", 0, 3, 0.4),
+            ev("Label", "Sliver", 0, 3, 0.6),
             ev("A", "One", 3, 300, 0.9),
             ev("B", "Two", 300, 600, 0.9),
         ],
