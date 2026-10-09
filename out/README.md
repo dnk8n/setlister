@@ -7,4 +7,6 @@ Each run writes a folder here named after the set, containing:
 - `setlist.json` – everything, machine readable
 - `README.md` – how to publish it
 
-Text results may be committed (they're small and useful as examples); media never is.
+Everything in here except this README is gitignored: results are specific to your set.
+Paste them where they belong (see each folder's README). For a worked example, see
+[docs/case-studies/](../docs/case-studies/).
