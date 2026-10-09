@@ -23,7 +23,7 @@ sites = ["bandcamp", "discogs", "soundcloud", "youtube"]
 resolve_exact = true
 
 [notes]
-enabled = true
+llm = false                  # LLM-written notes are slow locally; facts-only notes otherwise
 model = "ollama/qwen3:8b"    # free & local via https://ollama.com ; paid: "anthropic/claude-sonnet-5-5"
 # api_base = "http://localhost:11434"
 max_words = 70

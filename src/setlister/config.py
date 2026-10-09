@@ -47,7 +47,9 @@ class LinksConfig(_Section):
 
 
 class NotesConfig(_Section):
-    enabled: bool = True
+    # Off by default: a local LLM is slow on a laptop. Without it each track still gets a
+    # short factual note (year, label, styles). Turn on with `--llm-notes` or llm = true.
+    llm: bool = False
     # Any LiteLLM model string. Free default: a local Qwen via Ollama (https://ollama.com).
     # Paid examples: "anthropic/claude-sonnet-5-5", "openai/gpt-5-mini".
     model: str = "ollama/qwen3:8b"

@@ -28,8 +28,10 @@ class Check:
 
 def _ollama(cfg: Config) -> Check:
     model = cfg.notes.model
-    if not cfg.notes.enabled:
-        return Check("track notes", True, False, "disabled in config")
+    if not cfg.notes.llm:
+        return Check(
+            "track notes", True, False, "facts only (add --llm-notes for LLM-written notes)"
+        )
     if importlib.util.find_spec("litellm") is None:
         return Check(
             "track notes (LLM)",

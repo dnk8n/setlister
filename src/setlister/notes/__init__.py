@@ -1,8 +1,9 @@
 """A short, interesting paragraph per track, grounded in facts gathered from open databases.
 
 The text is written by an LLM through LiteLLM, so any provider works by changing one config
-string. The default is a free local model through Ollama (e.g. Qwen 3 8B). If no LLM is
-reachable, a plain factual sentence is produced instead, so a run never fails because of it.
+string. It is opt-in (`--llm-notes`), because a local model is slow on a laptop; the
+suggested free model is Qwen 3 8B through Ollama. Without an LLM, or if none is reachable,
+a plain factual sentence is produced instead, so a run never fails because of it.
 """
 
 from __future__ import annotations
@@ -44,8 +45,8 @@ def fallback_note(track: TrackRef, facts: dict) -> str | None:
 
 def write_note(track: TrackRef, facts: dict, cfg: NotesConfig) -> tuple[str | None, str]:
     """Returns (note, how) where how is the model name or 'facts' for the fallback."""
-    if not cfg.enabled:
-        return None, "disabled"
+    if not cfg.llm:
+        return fallback_note(track, facts), "facts"
     try:
         import litellm
 

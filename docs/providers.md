@@ -8,7 +8,7 @@
 | Discogs | release facts and links | free | free personal token |
 | Bandcamp | exact track pages (search page parsing; no API) | free | – |
 | Shazam (shazamio) | fingerprint unknown stretches; very robust on mixes | free, **unofficial** | on by default; `identify.shazam = false` to opt out |
-| Ollama + Qwen 3 | track notes, locally | free | `ollama pull qwen3:8b` |
+| Ollama + Qwen 3 | LLM-written track notes, locally (opt-in, slow on a laptop) | free | `--llm-notes`, `ollama pull qwen3:8b` |
 | Anthropic / OpenAI / … via LiteLLM | track notes | paid | `notes.model = "anthropic/…"`, key in keychain |
 | AudD, ACRCloud | fingerprinting | paid | TODO, see roadmap |
 

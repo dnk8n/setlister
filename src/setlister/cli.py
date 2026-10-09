@@ -64,6 +64,13 @@ def run(
     out: Annotated[
         Path | None, typer.Option("--out", help="Output directory (default: out/)")
     ] = None,
+    llm_notes: Annotated[
+        bool | None,
+        typer.Option(
+            "--llm-notes/--no-llm-notes",
+            help="Write track notes with an LLM (slow locally; off by default)",
+        ),
+    ] = None,
     skip_doctor: Annotated[bool, typer.Option(help="Don't check configuration first")] = False,
     config: ConfigOpt = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
@@ -79,6 +86,8 @@ def run(
     cfg, _ = load_config(config)
     if out:
         cfg.output.directory = out
+    if llm_notes is not None:
+        cfg.notes.llm = llm_notes
     if not skip_doctor and not render(run_checks(cfg, network=not offline)):
         console.print("[red]Fix the required items above, then run again.[/]")
         raise typer.Exit(2)
