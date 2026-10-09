@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# Secrets: never commit. Use the OS keychain (`setlister config`) or a local .env.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local user config (may point at private paths); the example is committed.
+setlister.toml
+!setlister.example.toml
+
+# Rich media: never committed outside docs/ (enforced by scripts/check_no_media.py too).
+media/
+*.wav
+*.WAV
+*.aif
+*.aiff
+*.flac
+*.mp3
+*.m4a
+*.ogg
+*.opus
+*.webm
+*.mp4
+*.mkv
+*.mov
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+!docs/**/*.png
+!docs/**/*.jpg
+!docs/**/*.svg
+!docs/**/*.gif
+
+# Run caches
+.setlister-cache/

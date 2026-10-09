@@ -1,0 +1,33 @@
+# Copy to ./setlister.toml (gitignored) or ~/.config/setlister/setlister.toml and edit.
+# Every value below is the default. No secrets here: use `setlister config set NAME`.
+
+[sources]
+youtube_comments = true      # read top comments for posted tracklists
+max_comments = 300
+
+[audio]
+analysis_sr = 11025          # low sample rate keeps a 2 h set fast and light
+download_when_original_given = false  # only downloads if the online copy looks trimmed
+max_tempo_change = 0.08      # ±8% playback speed search when matching local files
+
+[identify]
+acoustid = true              # free; needs `brew install chromaprint` and a free key
+shazam = true                # free but unofficial (shazamio); set false to opt out
+window_seconds = 20.0
+step_seconds = 30.0
+max_contenders = 3
+# TODO(paid): audd = false, acrcloud = false
+
+[links]
+sites = ["bandcamp", "discogs", "soundcloud", "youtube"]
+resolve_exact = true
+
+[notes]
+enabled = true
+model = "ollama/qwen3:8b"    # free & local via https://ollama.com ; paid: "anthropic/claude-sonnet-5-5"
+# api_base = "http://localhost:11434"
+max_words = 70
+
+[output]
+directory = "out"
+min_confidence_to_name = 0.5 # below this a row shows "ID?" with the candidates
