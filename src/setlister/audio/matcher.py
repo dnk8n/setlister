@@ -202,6 +202,8 @@ def locate_candidates(
     fps = index.fps
     rates = np.arange(1 - max_rate_change, 1 + max_rate_change + 1e-9, rate_step)
     half = int(excerpt_seconds * fps / 2)
+    if index.flux.shape[1] < 2 * half:
+        return []  # the recording is shorter than the excerpt (a clip): nothing to place
 
     # 1. coarse search: middle excerpt of the track at every candidate playback rate
     cands: list[tuple[float, float, int]] = []  # (score, rate, lag of track frame 0)

@@ -10,6 +10,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+from setlister.identify import RecognizerError
 from setlister.models import Source, TrackRef
 from setlister.secrets import get_secret
 
@@ -40,6 +41,8 @@ class AcoustIDRecognizer:
                             float(score),
                         )
                     )
+        except acoustid.WebServiceError as e:
+            raise RecognizerError(str(e)) from e
         except acoustid.AcoustidError:
             return []
         return out

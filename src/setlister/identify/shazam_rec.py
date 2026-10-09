@@ -9,9 +9,13 @@ set `identify.shazam = false` to opt out.
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 
+from setlister.identify import RecognizerError
 from setlister.models import Source, TrackRef
+
+PACE_SECONDS = 1.0  # be gentle: Shazam rate limits heavy use
 
 
 class ShazamRecognizer:
@@ -25,18 +29,28 @@ class ShazamRecognizer:
         return True, ""
 
     def recognize(self, wav: Path) -> list[tuple[TrackRef, float]]:
-        from shazamio import Shazam
+        from aiohttp_retry import ExponentialRetry
+        from shazamio import HTTPClient, Shazam
+
+        # shazamio's default retries a 429 up to 20 times with waits of up to a minute, which
+        # looks like a hang. Retry server errors briefly and report rate limits instead.
+        client = HTTPClient(
+            retry_options=ExponentialRetry(attempts=2, max_timeout=5, statuses={500, 502, 503, 504})
+        )
 
         async def go():
-            shazam = Shazam()
+            shazam = Shazam(http_client=client)
             fn = getattr(shazam, "recognize", None) or shazam.recognize_song
             return await fn(str(wav))
 
+        time.sleep(PACE_SECONDS)
         try:
             res = asyncio.run(go())
-        except Exception:
-            return []
-        track = res.get("track") if isinstance(res, dict) else None
+        except Exception as e:
+            raise RecognizerError(type(e).__name__) from e
+        if not isinstance(res, dict) or ("matches" not in res and "track" not in res):
+            raise RecognizerError("unexpected response (rate limited?)")
+        track = res.get("track")
         if not track:
             return []
         isrc = track.get("isrc")

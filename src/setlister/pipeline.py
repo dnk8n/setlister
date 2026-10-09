@@ -157,6 +157,15 @@ def run(inputs: RunInputs, cfg: Config) -> tuple[Setlist, Path]:
     )
     suggest_from_history(entries, evidence, history, unplaced, cfg.identify.max_contenders)
 
+    if duration and duration < 300:
+        console.print(
+            f"  [yellow]This upload is only {format_timestamp(duration)} long, so it is probably "
+            "a clip or highlight reel rather than the set; only what is audible in it can be "
+            "identified.[/]"
+        )
+    if not any(not e.is_unknown for e in entries):
+        console.print("  [yellow]No tracks could be identified in this upload.[/]")
+
     # 6. enrich -----------------------------------------------------------------------------
     if not inputs.offline:
         step("Finding links and writing track notes")
@@ -350,13 +359,13 @@ def describe_alignment(segments, original_duration: float, online_duration: floa
 def recognise_gaps(
     recording: Path, rec_duration: float, evidence: list[Evidence], cfg: Config, to_online
 ) -> list[Evidence]:
-    from setlister.identify import recognizers
+    from setlister.identify import CachedRecognizer, recognizers
 
     usable = []
     for r in recognizers(cfg):
         ok, why = r.available()
         if ok:
-            usable.append(r)
+            usable.append(CachedRecognizer(r, cfg.cache_dir))
         else:
             console.print(f"  [yellow]skipping {r.name.value}[/]: {why}")
     if not usable:
@@ -367,9 +376,12 @@ def recognise_gaps(
         if e.start is not None and e.end is not None and e.confidence >= 0.5
     ]
     win, step_s = cfg.identify.window_seconds, cfg.identify.step_seconds
+    t = 15.0  # skip the intro/crowd noise at the very start of a set...
+    if rec_duration < 2 * win + t:  # ...unless it's a short clip: then check all of it
+        t, win = 0.0, min(win, rec_duration)
+        step_s = max(win / 2, 1.0)
     times = []
-    t = 15.0
-    while t + win < rec_duration:
+    while t + win <= rec_duration:
         on = to_online(t)
         if on is not None and not any(s - 10 <= on <= e - 10 for s, e in covered):
             times.append(t)
@@ -405,10 +417,21 @@ def recognise_gaps(
                 check=True,
             )
             for r in usable:
-                for ref, score in r.recognize(wav)[:2]:
+                if r.gave_up:
+                    continue
+                found = r.recognize(wav)
+                if r.gave_up:
+                    console.print(
+                        f"  [yellow]{r.name.value} keeps failing (probably rate limited); "
+                        "skipping it for the rest of this run. Re-run later: answers so far "
+                        "are cached.[/]"
+                    )
+                for ref, score in found[:2]:
                     on = to_online(t)
                     if on is not None:
                         hits.append((on, ref, score, r.name))
+    for r in usable:
+        console.print(f"  {r.summary()}", highlight=False)
     return group_hits(hits, win)
 
 
