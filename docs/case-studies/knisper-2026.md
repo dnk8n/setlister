@@ -24,7 +24,7 @@ TODO the exact commands (relative paths), first without and then with `--llm-not
 ## Results per upload
 
 TODO a table per URL: identified, `ID`, low-confidence rows left out, how the upload aligned
-to the original (offset, cuts, speed), and run time. Then each `description.txt` block.
+to the original (offset, cuts, speed), and run time. Then each `description.youtube.txt` block (SoundCloud and Mixcloud files noted where they differ).
 
 ## Track notes: facts only vs Claude (Haiku)
 

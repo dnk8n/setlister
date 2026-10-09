@@ -183,7 +183,10 @@ def run(inputs: RunInputs, cfg: Config) -> tuple[Setlist, Path]:
     from setlister.output import slug, write_all
 
     outdir = write_all(
-        sl, cfg.output.directory / slug(sl.title or key), cfg.output.min_confidence_to_name
+        sl,
+        cfg.output.directory / slug(sl.title or key),
+        cfg.output.min_confidence_to_name,
+        sites=cfg.links.sites,
     )
     return sl, outdir
 

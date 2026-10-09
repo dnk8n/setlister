@@ -108,6 +108,23 @@ def run(
 
 
 @app.command()
+def render(
+    setlist_json: Annotated[Path, typer.Argument(help="A setlist.json from an earlier run")],
+    config: ConfigOpt = None,
+) -> None:
+    """Rewrite the paste files and tracklist.md from an (edited) setlist.json, no audio work."""
+    from setlister.models import Setlist
+    from setlister.output import write_all
+
+    cfg, _ = load_config(config)
+    sl = Setlist.model_validate_json(setlist_json.read_text())
+    out = write_all(
+        sl, setlist_json.parent, cfg.output.min_confidence_to_name, sites=cfg.links.sites
+    )
+    console.print(f"wrote {out}")
+
+
+@app.command()
 def doctor(config: ConfigOpt = None, offline: bool = False) -> None:
     """Check tools, keys and services, and explain what each one unlocks."""
     from setlister.doctor import render, run_checks
