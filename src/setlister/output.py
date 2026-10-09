@@ -78,8 +78,7 @@ def markdown(sl: Setlist, min_conf: float) -> str:
         if e.links:
             out += [
                 " · ".join(
-                    f"[{SITE_NAMES.get(link.site, link.site)}{'' if link.exact else ' (search)'}]({link.url})"
-                    for link in e.links
+                    f"[{SITE_NAMES.get(link.site, link.site)}]({link.url})" for link in e.links
                 ),
                 "",
             ]

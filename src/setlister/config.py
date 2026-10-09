@@ -43,7 +43,9 @@ class IdentifyConfig(_Section):
 
 class LinksConfig(_Section):
     sites: list[str] = ["bandcamp", "discogs", "soundcloud", "youtube"]
-    resolve_exact: bool = True  # try to find exact pages, not just search URLs
+    resolve_exact: bool = (
+        True  # look up confirmed pages; false = only links found in the set's own text
+    )
 
 
 class NotesConfig(_Section):

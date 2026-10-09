@@ -25,11 +25,24 @@ def find(track: TrackRef, release_id: str | None = None) -> Link | None:
         return None
     results = d.search(track=track.title, artist=track.artist, type="release")
     for rel in results.page(1)[:5]:
-        if similarity(rel.title, f"{track.artist} - {track.album or track.title}") > 0.5 or any(
-            similarity(t.title, track.title) > 0.85 for t in rel.tracklist
-        ):
+        # A release is confirmed only if its artist matches and it has the track on it.
+        artist = rel.title.split(" - ", 1)[0]
+        if similarity(artist, track.artist) < 0.8 and not _various_with(rel, track):
+            continue
+        if any(similarity(t.title, track.title) >= 0.85 for t in rel.tracklist):
             return Link(site="discogs", url=rel.url, exact=True)
     return None
+
+
+def _various_with(rel, track: TrackRef) -> bool:
+    """Compilations are titled "Various - …"; then the track's own artist must match."""
+    if not rel.title.lower().startswith("various"):
+        return False
+    for t in rel.tracklist:
+        names = " ".join(a.name for a in getattr(t, "artists", []) or [])
+        if names and similarity(names, track.artist) >= 0.8:
+            return True
+    return False
 
 
 def facts(url: str) -> dict:

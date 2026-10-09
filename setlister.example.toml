@@ -20,7 +20,7 @@ max_contenders = 3
 
 [links]
 sites = ["bandcamp", "discogs", "soundcloud", "youtube"]
-resolve_exact = true
+resolve_exact = true          # only confirmed track/release pages; a site with none is omitted
 
 [notes]
 llm = false                  # LLM-written notes are slow locally; facts-only notes otherwise
