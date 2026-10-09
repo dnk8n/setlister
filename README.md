@@ -34,7 +34,7 @@ answer, and only does heavy audio work for what is still unknown.
 | audio match | finds each of your local files inside the recording, even when you changed its tempo; aligns your original recording with a trimmed online copy | ~10 s per track on a laptop CPU |
 | recognise | fingerprints the stretches nothing explained (Shazam via shazamio, [AcoustID]) | network calls |
 | resolve | merges all evidence, keeps play order consistent, gives confidence and up to 3 contenders when unsure (`ID?`) | instant |
-| enrich | Bandcamp, Discogs, SoundCloud and YouTube links; a short note per track from [MusicBrainz]/Discogs facts; optionally (`--llm-notes`) written up by a local LLM ([Ollama] + Qwen) or any [LiteLLM] provider | network calls |
+| enrich | Bandcamp, Discogs, SoundCloud and YouTube links; a short note per track from [MusicBrainz]/Discogs facts; optionally (`--llm-notes`) written up by your [Claude Code] login, a local LLM ([Ollama] + Qwen) or any [LiteLLM] provider | network calls |
 
 Everything works with **free** services by default. Paid ones are opt-in (see
 [docs/providers.md](docs/providers.md)).
@@ -48,7 +48,8 @@ uv venv && uv pip install -e '.[llm]'    # or: python -m venv .venv && pip insta
 setlister doctor                         # tells you what's missing and what each piece unlocks
 setlister config set acoustid_key        # free keys go to your macOS Keychain, never to files
 setlister config set discogs_token
-ollama pull qwen3:8b                     # optional, for --llm-notes (slow on a laptop)
+ollama pull qwen3:8b                     # optional, for --llm-notes (slow on a laptop);
+                                         # or notes.model = "claude-code/haiku" if you use Claude Code
 ```
 
 Then:
@@ -99,4 +100,5 @@ program too. Setlister does not bundle or link GPL/AGPL code.
 [AcoustID]: https://acoustid.org
 [MusicBrainz]: https://musicbrainz.org
 [Ollama]: https://ollama.com
+[Claude Code]: https://code.claude.com
 [LiteLLM]: https://github.com/BerriAI/litellm

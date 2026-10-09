@@ -1,15 +1,25 @@
 """A short, interesting paragraph per track, grounded in facts gathered from open databases.
 
-The text is written by an LLM through LiteLLM, so any provider works by changing one config
-string. It is opt-in (`--llm-notes`), because a local model is slow on a laptop; the
-suggested free model is Qwen 3 8B through Ollama. Without an LLM, or if none is reachable,
-a plain factual sentence is produced instead, so a run never fails because of it.
+The text is written by an LLM, chosen with one config string (`notes.model`):
+
+- `claude-code/<model>` runs the Claude Code CLI headless (`claude -p`), so it uses the
+  subscription you are already logged in with and needs no API key. `<model>` is whatever
+  the CLI's `--model` accepts, such as `haiku` or `sonnet`.
+- anything else is a LiteLLM model string, e.g. `anthropic/claude-haiku-5-5` (API key in the
+  keychain) or the free local `ollama/qwen3:8b`.
+
+It is opt-in (`--llm-notes`). Without an LLM, or if none answers, a plain factual sentence is
+produced instead, so a run never fails because of it. Notes are never cached: every run
+writes them from scratch.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import shutil
+import subprocess
+import tempfile
 
 from setlister.config import NotesConfig
 from setlister.models import TrackRef
@@ -20,7 +30,8 @@ PROMPT = """You write liner-note style blurbs for a DJ set tracklist.
 Write ONE paragraph of at most {max_words} words about the track below that a listener would
 find interesting (origin, label, scene, sample, the artist's story, how it was received).
 Use ONLY the facts provided; if they are thin, keep it short and do not invent anything.
-No hype words, no emojis, no preamble. Plain text only.
+No hype words, no emojis, no preamble. Never mention the facts, their limits or these
+instructions. Plain text only.
 
 Track: {display}
 Facts (JSON): {facts}
@@ -47,34 +58,60 @@ def write_note(track: TrackRef, facts: dict, cfg: NotesConfig) -> tuple[str | No
     """Returns (note, how) where how is the model name or 'facts' for the fallback."""
     if not cfg.llm:
         return fallback_note(track, facts), "facts"
+    prompt = PROMPT.format(
+        max_words=cfg.max_words,
+        display=track.display,
+        facts=json.dumps(facts, ensure_ascii=False, default=str)[:4000],
+    )
     try:
-        import litellm
-
-        litellm.suppress_debug_info = True
-        resp = litellm.completion(
-            model=cfg.model,
-            api_base=cfg.api_base,
-            messages=[
-                {
-                    "role": "user",
-                    "content": PROMPT.format(
-                        max_words=cfg.max_words,
-                        display=track.display,
-                        facts=json.dumps(facts, ensure_ascii=False, default=str)[:4000],
-                    ),
-                }
-            ],
-            temperature=0.3,
-            timeout=120,
-            **_key_for(cfg.model),
-        )
-        text = resp.choices[0].message.content or ""
+        if cfg.model.startswith(CLAUDE_CODE):
+            text = _claude_code(prompt, cfg.model.removeprefix(CLAUDE_CODE))
+        else:
+            text = _litellm(prompt, cfg)
         text = _strip_thinking(text).strip()
         if text:
             return text, cfg.model
     except Exception as e:
         log.info("LLM note unavailable (%s); using facts only", type(e).__name__)
     return fallback_note(track, facts), "facts"
+
+
+CLAUDE_CODE = "claude-code/"
+
+
+def _claude_code(prompt: str, model: str, timeout: float = 120) -> str:
+    """One headless Claude Code turn with no tools, run in an empty folder so it reads nothing."""
+    exe = shutil.which("claude")
+    if not exe:
+        raise FileNotFoundError("claude")
+    with tempfile.TemporaryDirectory() as cwd:
+        done = subprocess.run(
+            [exe, "-p", prompt, "--model", model, "--output-format", "text"]
+            + ["--tools", "", "--strict-mcp-config", "--no-session-persistence"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,
+        )
+    if done.returncode != 0:
+        raise RuntimeError(f"claude exited with {done.returncode}")
+    return done.stdout
+
+
+def _litellm(prompt: str, cfg: NotesConfig) -> str:
+    import litellm
+
+    litellm.suppress_debug_info = True
+    resp = litellm.completion(
+        model=cfg.model,
+        api_base=cfg.api_base,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+        timeout=120,
+        **_key_for(cfg.model),
+    )
+    return resp.choices[0].message.content or ""
 
 
 def _key_for(model: str) -> dict:

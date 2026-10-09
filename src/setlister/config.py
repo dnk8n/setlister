@@ -50,8 +50,9 @@ class NotesConfig(_Section):
     # Off by default: a local LLM is slow on a laptop. Without it each track still gets a
     # short factual note (year, label, styles). Turn on with `--llm-notes` or llm = true.
     llm: bool = False
-    # Any LiteLLM model string. Free default: a local Qwen via Ollama (https://ollama.com).
-    # Paid examples: "anthropic/claude-sonnet-5-5", "openai/gpt-5-mini".
+    # "claude-code/haiku" uses the Claude Code CLI you are logged in to (no API key).
+    # Anything else is a LiteLLM model string: free local Qwen via Ollama (the default,
+    # https://ollama.com), or paid APIs such as "anthropic/claude-haiku-5-5".
     model: str = "ollama/qwen3:8b"
     api_base: str | None = None
     max_words: int = 70

@@ -24,7 +24,9 @@ resolve_exact = true
 
 [notes]
 llm = false                  # LLM-written notes are slow locally; facts-only notes otherwise
-model = "ollama/qwen3:8b"    # free & local via https://ollama.com ; paid: "anthropic/claude-sonnet-5-5"
+model = "ollama/qwen3:8b"    # free & local via https://ollama.com
+# model = "claude-code/haiku"            # your Claude Code login (`claude` CLI), no API key
+# model = "anthropic/claude-haiku-5-5"   # Anthropic API; setlister config set anthropic_api_key
 # api_base = "http://localhost:11434"
 max_words = 70
 

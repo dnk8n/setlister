@@ -9,7 +9,8 @@
 | Bandcamp | exact track pages (search page parsing; no API) | free | – |
 | Shazam (shazamio) | fingerprint unknown stretches; very robust on mixes | free, **unofficial** | on by default; `identify.shazam = false` to opt out |
 | Ollama + Qwen 3 | LLM-written track notes, locally (opt-in, slow on a laptop) | free | `--llm-notes`, `ollama pull qwen3:8b` |
-| Anthropic / OpenAI / … via LiteLLM | track notes | paid | `notes.model = "anthropic/…"`, key in keychain |
+| Claude Code CLI (`claude -p`) | track notes, using the Claude subscription you are logged in with | your plan | `notes.model = "claude-code/haiku"`, run `claude` once and `/login` |
+| Anthropic / OpenAI / … via LiteLLM | track notes | paid | `notes.model = "anthropic/claude-haiku-5-5"`, `setlister config set anthropic_api_key` |
 | AudD, ACRCloud | fingerprinting | paid | TODO, see roadmap |
 
 Shazam through shazamio is not an official API. It can break or be rate limited, and you are

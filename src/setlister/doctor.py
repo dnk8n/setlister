@@ -7,7 +7,9 @@ before any heavy work starts.
 from __future__ import annotations
 
 import importlib.util
+import json
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 
@@ -32,6 +34,8 @@ def _ollama(cfg: Config) -> Check:
         return Check(
             "track notes", True, False, "facts only (add --llm-notes for LLM-written notes)"
         )
+    if model.startswith("claude-code/"):
+        return _claude_code(model)
     if importlib.util.find_spec("litellm") is None:
         return Check(
             "track notes (LLM)",
@@ -72,6 +76,33 @@ def _ollama(cfg: Config) -> Check:
             f"ollama pull {name}",
         )
     return Check("track notes (local LLM)", True, False, f"{model} via Ollama")
+
+
+def _claude_code(model: str) -> Check:
+    name = "track notes (Claude Code)"
+    exe = shutil.which("claude")
+    if not exe:
+        return Check(
+            name,
+            False,
+            False,
+            "claude CLI not found; notes will be plain facts",
+            "install Claude Code: https://code.claude.com/docs",
+        )
+    try:
+        done = subprocess.run([exe, "auth", "status"], capture_output=True, text=True, timeout=20)
+        logged_in = bool(json.loads(done.stdout).get("loggedIn"))
+    except (subprocess.SubprocessError, ValueError, OSError):
+        logged_in = False
+    if not logged_in:
+        return Check(
+            name,
+            False,
+            False,
+            "claude CLI is not logged in; notes will be plain facts",
+            "run `claude` once and complete /login",
+        )
+    return Check(name, True, False, f"{model} via your Claude login")
 
 
 def run_checks(cfg: Config, *, network: bool = True) -> list[Check]:
