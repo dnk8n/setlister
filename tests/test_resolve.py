@@ -57,3 +57,27 @@ def test_description_text_has_zero_start_and_id_guesses():
     lines = text.splitlines()
     assert lines[1].startswith("00:00 A - One")
     assert "ID? (B - Two)" in lines[2]
+
+
+def test_same_track_tolerates_accents_and_extra_credits():
+    from setlister.resolve import same_track
+
+    a = TrackRef(artist="Pépé Bradock & The Grand Brûlé's Choir", title="Deep Burnt", isrc="X1")
+    b = TrackRef(artist="Pepe Bradock", title="Deep Burnt", isrc="Y2")
+    assert same_track(a, b)
+    assert not same_track(a, TrackRef(artist="Someone Else", title="Deep Burnt"))
+
+
+def test_zero_length_rows_are_folded_into_neighbours():
+    entries = resolve(
+        [
+            ev("Label", "Sliver", 0, 3, 0.4),
+            ev("A", "One", 3, 300, 0.9),
+            ev("B", "Two", 300, 600, 0.9),
+        ],
+        duration=600,
+    )
+    starts = [e.start for e in entries]
+    assert starts == sorted(set(starts)) and starts[0] == 0
+    assert all((e.end or 600) - e.start >= 20 for e in entries)
+    assert entries[0].track.title == "One" and entries[0].contenders[0].title == "Sliver"

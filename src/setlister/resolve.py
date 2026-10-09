@@ -14,17 +14,26 @@ Rules, in plain words:
 from __future__ import annotations
 
 from setlister.models import Entry, Evidence, TrackRef
-from setlister.textnorm import similarity
+from setlister.textnorm import norm, similarity
 
 SAME_TRACK = 0.8
+MIN_ROW_SECONDS = 20.0
 
 
 def same_track(a: TrackRef, b: TrackRef) -> bool:
-    if a.isrc and b.isrc:
-        return a.isrc == b.isrc
-    if a.musicbrainz_recording_id and b.musicbrainz_recording_id:
-        return a.musicbrainz_recording_id == b.musicbrainz_recording_id
-    return similarity(a.display, b.display) >= SAME_TRACK
+    """Same recording? IDs decide when they agree; otherwise compare names leniently, since
+    sources credit artists differently ('Pepe Bradock' vs 'Pépé Bradock & The Grand Brûlé's
+    Choir'). Different ISRCs don't prove different tracks (re-releases get new ones)."""
+    if a.isrc and a.isrc == b.isrc:
+        return True
+    if a.musicbrainz_recording_id and a.musicbrainz_recording_id == b.musicbrainz_recording_id:
+        return True
+    if similarity(a.display, b.display) >= SAME_TRACK:
+        return True
+    if not (a.title and b.title) or similarity(a.title, b.title) < 0.85:
+        return False
+    ta, tb = set(norm(a.artist).split()), set(norm(b.artist).split())
+    return bool(ta & tb) or not ta or not tb
 
 
 def combine(c1: float, c2: float) -> float:
@@ -108,6 +117,7 @@ def resolve(
     entries.sort(key=lambda x: x.start)
     _split_transitions(entries)
     entries = _fill_gaps(entries, duration, min_gap)
+    entries = _drop_slivers(entries)
 
     for w in weak:
         for entry in entries:
@@ -119,6 +129,29 @@ def resolve(
     for entry in entries:
         entry.contenders = entry.contenders[:max_contenders]
     return entries
+
+
+def _drop_slivers(entries: list[Entry], min_len: float = MIN_ROW_SECONDS) -> list[Entry]:
+    """Rows shorter than `min_len` (YouTube chapters need >= 10 s, and a play that short is
+    noise) are folded into a neighbour; a named sliver becomes that neighbour's contender."""
+    out: list[Entry] = []
+    for e in entries:
+        length = (e.end if e.end is not None else e.start + min_len) - e.start
+        if length >= min_len or not out and len(entries) == 1:
+            out.append(e)
+            continue
+        target = out[-1] if out else None
+        if target is None:
+            continue  # handled below: the next row will start at 0
+        target.end = e.end if e.end is not None else target.end
+        if not e.is_unknown and not same_track(target.track, e.track):
+            target.contenders.append(e.track)
+    if out and entries and out[0].start > entries[0].start:
+        first = entries[0]
+        if not first.is_unknown and not same_track(out[0].track, first.track):
+            out[0].contenders.insert(0, first.track)
+        out[0].start = entries[0].start
+    return out
 
 
 def _fill(dst: TrackRef, src: TrackRef) -> None:

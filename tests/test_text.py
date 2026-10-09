@@ -58,3 +58,35 @@ def test_norm_and_similarity():
     assert similarity("Mr G - Transient", "Mr. G - Transient") > 0.9
     assert similarity("Mr G - Transient", "Floorplan - Never Grow Old") < 0.4
     assert split_artist_title("A – B - C") == ("A", "B - C")
+
+
+def test_tidy_various_and_position():
+    from setlister.models import TrackRef
+
+    t = TrackRef(
+        artist="Various", title="B2. DFRA - Dancin’ feat. Agus Morgavi (House Master Flash Rework)"
+    )
+    assert t.artist == "DFRA" and t.title.startswith("Dancin")
+
+
+def test_tidy_remixer_as_artist():
+    from setlister.models import TrackRef
+
+    t = TrackRef(artist="D. Tyrone", title="Underground Resistance - Transition (D. Tyrone Remix)")
+    assert (t.artist, t.title) == ("Underground Resistance", "Transition (D. Tyrone Remix)")
+
+
+def test_tidy_keeps_real_hyphenated_titles():
+    from setlister.models import TrackRef
+
+    t = TrackRef(artist="Floorplan", title="Never Grow Old - Re-plant")
+    assert (t.artist, t.title) == ("Floorplan", "Never Grow Old - Re-plant")
+
+
+def test_tidy_duplicate_mix_name():
+    from setlister.models import TrackRef
+
+    assert (
+        TrackRef(artist="A", title="You Might Wanna (Club Mix) [Club Mix]").title
+        == "You Might Wanna (Club Mix)"
+    )

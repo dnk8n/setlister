@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class TrackRef(BaseModel):
@@ -25,6 +25,13 @@ class TrackRef(BaseModel):
     musicbrainz_recording_id: str | None = None
     isrc: str | None = None
     discogs_release_id: str | None = None
+
+    @model_validator(mode="after")
+    def _tidy(self) -> TrackRef:
+        from setlister.textnorm import tidy_artist_title
+
+        self.artist, self.title = tidy_artist_title(self.artist, self.title)
+        return self
 
     @property
     def display(self) -> str:

@@ -22,7 +22,7 @@ from rich.console import Console
 
 from setlister.config import Config
 from setlister.models import Entry, Evidence, Setlist, Source, TrackRef
-from setlister.resolve import pick_in_order, resolve
+from setlister.resolve import pick_in_order, resolve, same_track
 from setlister.timefmt import format_timestamp
 
 log = logging.getLogger(__name__)
@@ -94,7 +94,17 @@ def run(inputs: RunInputs, cfg: Config) -> tuple[Setlist, Path]:
             segments = align(index, on_feat)
             offset_note = describe_alignment(segments, rec_feat.duration, on_feat.duration)
             duration = on_feat.duration
+            if not segments:
+                # Fall back to analysing the online copy itself, so times are still right.
+                offset_note += " Analysed the online copy directly instead."
+                recording, rec_feat = online_path, on_feat
+                index = MixIndex(rec_feat)
             console.print(f"  {offset_note}")
+        elif inputs.original and info.get("duration"):
+            offset_note = (
+                "The online copy is as long as the original recording, so they were "
+                "assumed identical (no download)."
+            )
 
         def to_online(t: float) -> float | None:
             return original_to_online(t, segments) if segments else t
@@ -153,6 +163,8 @@ def run(inputs: RunInputs, cfg: Config) -> tuple[Setlist, Path]:
         entries=entries,
         offset_note=offset_note,
     )
+    named = [e.track for e in entries if not e.is_unknown]
+    unplaced = [t for t in unplaced if not any(same_track(t, n) for n in named)]
     if unplaced:
         sl.offset_note = (
             (sl.offset_note or "") + " Also in the DJ history but not heard in this "
@@ -308,6 +320,9 @@ def describe_alignment(segments, original_duration: float, online_duration: floa
             parts.append(
                 f"The online copy has {format_timestamp(-first.offset)} extra at the start"
             )
+    if abs(first.rate - 1) > 0.001:
+        faster = "faster" if first.rate > 1 else "slower"
+        parts.append(f"plays {abs(first.rate - 1):.1%} {faster} than the original")
     if len(segments) > 1:
         parts.append(f"and has {len(segments) - 1} cut(s)")
     if not parts:

@@ -60,3 +60,13 @@ def test_align_trimmed_copy():
 def test_stretch_changes_length():
     x = np.random.default_rng(0).random((4, 1000)).astype(np.float32)
     assert stretch(x, 1.25).shape == (4, 800)
+
+
+def test_align_sped_up_reupload():
+    original = synth_track(11, 400, 126)
+    # online copy: starts 20 s in, and plays 4 % fast (24 -> 25 fps style conversion)
+    online = resample(original[int(20 * SR) : int(380 * SR)], 1.04)
+    segs = align(MixIndex(logmel(original, SR)), logmel(online, SR), step_seconds=40)
+    assert segs and abs(segs[0].rate - 1.04) <= 0.0051
+    # 200 s into the original is (200 - 20) / 1.04 s into the online copy
+    assert abs(original_to_online(200.0, segs) - 180 / 1.04) < 1.5
