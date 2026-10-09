@@ -22,6 +22,7 @@ from rich.console import Console
 
 from setlister.config import Config
 from setlister.models import Entry, Evidence, Setlist, Source, TrackRef
+from setlister.progress import track
 from setlister.resolve import pick_in_order, resolve, same_track
 from setlister.timefmt import format_timestamp
 
@@ -113,7 +114,7 @@ def run(inputs: RunInputs, cfg: Config) -> tuple[Setlist, Path]:
         if files:
             step(f"Locating {len(files)} history tracks in the recording")
             options: list[list[Evidence]] = [[] for _ in history]
-            for i, t in files:
+            for i, t in track(files, "Locating", console, lambda f: f[1].display):
                 feat = features_for(Path(t.path), cfg.audio.analysis_sr, cfg.cache_dir)
                 for m in locate_candidates(index, feat, max_rate_change=cfg.audio.max_tempo_change)[
                     :3
@@ -159,9 +160,11 @@ def run(inputs: RunInputs, cfg: Config) -> tuple[Setlist, Path]:
     # 6. enrich -----------------------------------------------------------------------------
     if not inputs.offline:
         step("Finding links and writing track notes")
-        for e in entries:
-            if not e.is_unknown:
-                enrich(e, cfg)
+        named = [e for e in entries if not e.is_unknown]
+        how = f"notes: {cfg.notes.model}" if cfg.notes.llm else "notes: facts only"
+        step(f"{len(named)} tracks ({how})")
+        for e in track(named, "Links & notes", console, lambda e: e.track.display):
+            enrich(e, cfg)
 
     sl = Setlist(
         url=inputs.url or str(inputs.original or ""),
@@ -378,7 +381,7 @@ def recognise_gaps(
     )
     hits: list[tuple[float, TrackRef, float, Source]] = []
     with tempfile.TemporaryDirectory() as tmp:
-        for t in times:
+        for t in track(times, "Fingerprinting", console, lambda t: "at " + format_timestamp(t)):
             wav = Path(tmp) / "w.wav"
             subprocess.run(
                 [
