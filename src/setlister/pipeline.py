@@ -469,12 +469,21 @@ def recognise_gaps(
         # A reel's piece is seconds of a longer play. The original recording has the whole
         # play, so also listen to a full-length window around the piece: a second, independent
         # observation of the same track (credited to the piece's span only).
-        on_a, on_b = to_online(a), to_online(b)
-        if on_a is None or on_b is None or any(s - 10 <= on_a <= e - 10 for s, e in covered):
+        # (Only the piece's start is mapped: its end can fall a hair outside the segment.)
+        on_a = to_online(a)
+        if on_a is None:
+            console.print(f"  [yellow]reel piece at original {format_timestamp(a)} did not map[/]")
             continue
+        on_b = on_a + max(b - a, 3.0)
         long_win = cfg.identify.window_seconds
         cut = max(0.0, min((a + b) / 2 - long_win / 2, rec_duration - long_win))
-        windows.append((cut, long_win, on_a, max(on_b, on_a + 3)))
+        console.print(
+            f"  reel {format_timestamp(on_a)}–{format_timestamp(on_b)} = original "
+            f"{format_timestamp(a)}–{format_timestamp(b)}: also checking "
+            f"{format_timestamp(cut)}–{format_timestamp(cut + long_win)}",
+            highlight=False,
+        )
+        windows.append((cut, long_win, on_a, on_b))
     if not windows:
         return []
     step(
