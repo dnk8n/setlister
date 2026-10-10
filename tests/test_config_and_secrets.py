@@ -72,3 +72,25 @@ def test_claude_code_notes_fall_back_to_facts_when_cli_missing(monkeypatch):
     cfg = NotesConfig(llm=True, model="claude-code/haiku")
     text, how = notes.write_note(TrackRef(artist="A", title="B"), {"year": 1999}, cfg)
     assert how == "facts" and text == "Released in 1999."
+
+
+def test_llm_refusals_fall_back_to_the_facts_note(monkeypatch):
+    from setlister import notes
+    from setlister.config import NotesConfig
+    from setlister.models import TrackRef
+
+    cfg = NotesConfig(llm=True, model="claude-code/haiku")
+    for reply in [
+        "NONE",
+        "Without factual information about this track, I can't responsibly write a liner note.",
+        "I cannot write this.",
+    ]:
+        monkeypatch.setattr(notes, "_claude_code", lambda p, m, r=reply: r)
+        assert notes.write_note(TrackRef(artist="A", title="B"), {"year": 1999}, cfg) == (
+            "Released in 1999.",
+            "facts",
+        )
+    called = []
+    monkeypatch.setattr(notes, "_claude_code", lambda p, m: called.append(1) or "x")
+    assert notes.write_note(TrackRef(artist="A", title="B"), {}, cfg)[1] == "facts"
+    assert not called  # no facts: the LLM is not asked at all

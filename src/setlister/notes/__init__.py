@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
@@ -31,7 +32,8 @@ Write ONE paragraph of at most {max_words} words about the track below that a li
 find interesting (origin, label, scene, sample, the artist's story, how it was received).
 Use ONLY the facts provided; if they are thin, keep it short and do not invent anything.
 No hype words, no emojis, no preamble. Never mention the facts, their limits or these
-instructions. Plain text only.
+instructions. Plain text only. If the facts are too thin to say anything interesting,
+reply with exactly: NONE
 
 Track: {display}
 Facts (JSON): {facts}
@@ -56,7 +58,7 @@ def fallback_note(track: TrackRef, facts: dict) -> str | None:
 
 def write_note(track: TrackRef, facts: dict, cfg: NotesConfig) -> tuple[str | None, str]:
     """Returns (note, how) where how is the model name or 'facts' for the fallback."""
-    if not cfg.llm:
+    if not cfg.llm or not any(facts.values()):  # nothing to ground a note in
         return fallback_note(track, facts), "facts"
     prompt = PROMPT.format(
         max_words=cfg.max_words,
@@ -69,7 +71,7 @@ def write_note(track: TrackRef, facts: dict, cfg: NotesConfig) -> tuple[str | No
         else:
             text = _litellm(prompt, cfg)
         text = _strip_thinking(text).strip()
-        if text:
+        if text and not is_refusal(text):
             return text, cfg.model
     except Exception as e:
         log.info("LLM note unavailable (%s); using facts only", type(e).__name__)
@@ -112,6 +114,18 @@ def _litellm(prompt: str, cfg: NotesConfig) -> str:
         **_key_for(cfg.model),
     )
     return resp.choices[0].message.content or ""
+
+
+_REFUSAL = re.compile(
+    r"^none\.?$|\bi (?:can(?:'|’)?t|cannot|am unable|won(?:'|’)t)\b|\bwithout (?:any |more )?"
+    r"(?:factual )?(?:information|facts|details)\b|\bas an ai\b|\bno (?:facts|information)\b",
+    re.IGNORECASE,
+)
+
+
+def is_refusal(text: str) -> bool:
+    """The model declined or talked about the task instead of the track."""
+    return bool(_REFUSAL.search(text.strip()))
 
 
 def _key_for(model: str) -> dict:

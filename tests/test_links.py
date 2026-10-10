@@ -58,3 +58,40 @@ def test_video_hit_of_a_different_version_is_rejected(monkeypatch):
     assert video_sites.find(TRACK, "youtube") is None
     remix = TrackRef(artist="DFRA", title="Dancin' (Someone Remix)")
     assert video_sites.find(remix, "youtube").url == "u"
+
+
+def test_bandcamp_autocomplete_results_are_matched_on_artist_and_title(monkeypatch):
+    from setlister.links import bandcamp
+
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "auto": {
+                    "results": [
+                        {
+                            "type": "b",
+                            "name": "Asa Tate",
+                            "item_url_path": "https://a.bandcamp.com",
+                        },
+                        {
+                            "type": "t",
+                            "name": "Replica (Edit)",
+                            "band_name": "Someone",
+                            "item_url_path": "https://x.bandcamp.com/track/replica-edit",
+                        },
+                        {
+                            "type": "t",
+                            "name": "Replica",
+                            "band_name": "Asa Tate",
+                            "item_url_path": "https://asatate.bandcamp.com/track/replica?from=search",
+                        },
+                    ]
+                }
+            }
+
+    monkeypatch.setattr(bandcamp.requests, "post", lambda *a, **k: Resp())
+    link = bandcamp.find(TrackRef(artist="Asa Tate", title="Replica"))
+    assert link.url == "https://asatate.bandcamp.com/track/replica"

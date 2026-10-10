@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from setlister import __version__
 from setlister.models import Link, TrackRef
 from setlister.secrets import get_secret
@@ -26,7 +28,8 @@ def find(track: TrackRef, release_id: str | None = None) -> Link | None:
     results = d.search(track=track.title, artist=track.artist, type="release")
     for rel in results.page(1)[:5]:
         # A release is confirmed only if its artist matches and it has the track on it.
-        artist = rel.title.split(" - ", 1)[0]
+        # Discogs adds "(2)" to tell same-named artists apart, and "*" for name variations.
+        artist = re.sub(r"\s*\(\d+\)|\*", "", rel.title.split(" - ", 1)[0])
         if similarity(artist, track.artist) < 0.8 and not _various_with(rel, track):
             continue
         if any(similarity(t.title, track.title) >= 0.85 for t in rel.tracklist):
