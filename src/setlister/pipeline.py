@@ -510,7 +510,8 @@ def recognise_gaps(
 
 
 def group_hits(hits, window: float) -> list[Evidence]:
-    """Consecutive windows naming the same track become one piece of evidence."""
+    """Consecutive windows where one recogniser names the same track become one piece of
+    evidence. Each recogniser keeps its own, so the resolver can see when they agree."""
     from setlister.resolve import combine, same_track
 
     hits.sort(key=lambda h: h[0])
@@ -519,8 +520,8 @@ def group_hits(hits, window: float) -> list[Evidence]:
         g = next(
             (
                 g
-                for g in reversed(groups[-4:])
-                if same_track(g.track, ref) and t - (g.end or g.start) < 120
+                for g in reversed(groups[-8:])
+                if g.source == src and same_track(g.track, ref) and t - (g.end or g.start) < 120
             ),
             None,
         )
@@ -540,6 +541,7 @@ def enrich(entry: Entry, cfg: Config) -> None:
     from setlister.identify import musicbrainz
     from setlister.links import discogs, find_links
     from setlister.notes import write_note
+    from setlister.resolve import add_sample
 
     facts: dict = {}
     known = []
@@ -547,6 +549,8 @@ def enrich(entry: Entry, cfg: Config) -> None:
     if rec:
         f, known = musicbrainz.facts_and_links(rec)
         facts.update(f)
+        for t in musicbrainz.sampled(rec):
+            add_sample(entry, t, "MusicBrainz")
         entry.note_sources.append("MusicBrainz")
     links = find_links(
         entry.track,
@@ -567,6 +571,9 @@ def enrich(entry: Entry, cfg: Config) -> None:
             entry.note_sources.append("Discogs")
         except Exception as e:
             log.debug("discogs facts: %s", e)
+    heard = [s.track.display for s in entry.samples if s.source != "MusicBrainz"]
+    if heard:
+        facts["possible_sample_heard_in_mix"] = heard
     if entry.track.label:
         facts.setdefault("label_from_file_tags", entry.track.label)
     entry.note, how = write_note(entry.track, facts, cfg.notes)

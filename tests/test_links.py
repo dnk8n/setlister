@@ -29,7 +29,7 @@ def test_unidentified_tracks_get_no_links():
 
 def test_video_hit_must_name_the_artist(monkeypatch):
     hit = {"title": "Dancin' (Original Mix)", "uploader": "Some Label", "webpage_url": "u"}
-    monkeypatch.setattr(video_sites, "search_first", lambda q, site: hit)
+    monkeypatch.setattr(video_sites, "search", lambda q, site, n: [hit])
     assert video_sites.find(TRACK, "youtube") is None
     hit["uploader"] = "DFRA"
     assert video_sites.find(TRACK, "youtube").url == "u"
@@ -54,7 +54,7 @@ def test_discogs_release_must_carry_the_track(monkeypatch):
 
 def test_video_hit_of_a_different_version_is_rejected(monkeypatch):
     hit = {"title": "DFRA - Dancin' (Someone Remix)", "uploader": "x", "webpage_url": "u"}
-    monkeypatch.setattr(video_sites, "search_first", lambda q, site: hit)
+    monkeypatch.setattr(video_sites, "search", lambda q, site, n: [hit])
     assert video_sites.find(TRACK, "youtube") is None
     remix = TrackRef(artist="DFRA", title="Dancin' (Someone Remix)")
     assert video_sites.find(remix, "youtube").url == "u"
@@ -95,3 +95,28 @@ def test_bandcamp_autocomplete_results_are_matched_on_artist_and_title(monkeypat
     monkeypatch.setattr(bandcamp.requests, "post", lambda *a, **k: Resp())
     link = bandcamp.find(TrackRef(artist="Asa Tate", title="Replica"))
     assert link.url == "https://asatate.bandcamp.com/track/replica"
+
+
+def test_official_upload_beats_a_fan_upload_which_is_the_fallback(monkeypatch):
+    fan = {"title": "DFRA - Dancin'", "uploader": "fan123", "webpage_url": "fan"}
+    official = {"title": "Dancin'", "uploader": "DFRA", "webpage_url": "official"}
+    monkeypatch.setattr(video_sites, "search", lambda q, site, n: [fan, official])
+    assert video_sites.find(TRACK, "soundcloud").url == "official"
+    monkeypatch.setattr(video_sites, "search", lambda q, site, n: [fan])
+    assert video_sites.find(TRACK, "soundcloud").url == "fan"
+
+
+def test_musicbrainz_sample_relations_are_read_forwards_only():
+    from setlister.identify.musicbrainz import sampled
+
+    rec = {
+        "recording-relation-list": [
+            {
+                "type": "samples material",
+                "recording": {"title": "Never Grow Old", "artist-credit-phrase": "Aretha Franklin"},
+            },
+            {"type": "samples material", "direction": "backward", "recording": {"title": "Later"}},
+            {"type": "remix", "recording": {"title": "Other"}},
+        ]
+    }
+    assert [t.display for t in sampled(rec)] == ["Aretha Franklin - Never Grow Old"]

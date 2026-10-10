@@ -35,7 +35,7 @@ def _throttle() -> None:
 
 
 def find_recording(track: TrackRef) -> dict | None:
-    includes = ["artists", "releases", "url-rels", "isrcs", "tags"]
+    includes = ["artists", "releases", "url-rels", "recording-rels", "isrcs", "tags"]
     try:
         if track.musicbrainz_recording_id:
             _throttle()
@@ -87,6 +87,9 @@ def facts_and_links(rec: dict) -> tuple[dict, list[Link]]:
         facts["first_release_date"] = dates[0]
     facts["releases"] = [r.get("title") for r in releases[:5]]
     facts["tags"] = [t["name"] for t in rec.get("tag-list", [])[:8]]
+    samples = sampled(rec)
+    if samples:
+        facts["samples"] = [t.display for t in samples]
     links = [
         Link(site="musicbrainz", url=f"https://musicbrainz.org/recording/{rec['id']}", exact=True)
     ]
@@ -96,3 +99,18 @@ def facts_and_links(rec: dict) -> tuple[dict, list[Link]]:
             if host in url:
                 links.append(Link(site=site, url=url, exact=True))
     return facts, links
+
+
+def sampled(rec: dict) -> list[TrackRef]:
+    """Recordings this one samples ("samples material", read forwards; backwards means
+    it was sampled by the other recording)."""
+    out = []
+    for rel in rec.get("recording-relation-list", []):
+        if rel.get("type") != "samples material" or rel.get("direction") == "backward":
+            continue
+        target = rel.get("recording") or {}
+        if target.get("title"):
+            out.append(
+                TrackRef(artist=target.get("artist-credit-phrase", ""), title=target["title"])
+            )
+    return out

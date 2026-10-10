@@ -74,3 +74,19 @@ def test_folder_names_stay_unique_for_uploads_with_similar_titles():
         "d__gZC1iRnI",
     )
     assert a != b and a.endswith("-omxI8_CGaSs") and not a.split("-omxI8")[0].endswith("-")
+
+
+def test_sample_footnotes_are_listed_and_dropped_before_links():
+    from setlister.models import Sample
+
+    sl = setlist(n=3)
+    sl.entries[1].samples = [
+        Sample(track=TrackRef(artist="Aretha Franklin", title="Never Grow Old"), source="x")
+    ]
+    text = description_text(sl, sites=["bandcamp"])
+    assert (
+        "Samples:\n2. Artist 1 - Track (1) samples Aretha Franklin - Never Grow Old (possibly"
+        in text
+    )
+    tight = description_text(sl, limit=len(text) - 1, sites=["bandcamp"])
+    assert "Samples:" not in tight and tight.count("https://b.example/1") == 3

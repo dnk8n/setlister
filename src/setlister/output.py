@@ -97,7 +97,10 @@ def description_text(
         (i, e, _best_link(e, sites)) for i, e in enumerate(sl.entries, 1) if not e.is_unknown
     ]
     links = {i: url for i, _, url in numbered if url}
-    by_certainty = sorted((e.confidence, i) for i, e, url in numbered if url)
+    samples = {i: sample_line(e) for i, e, _ in numbered if e.samples}
+    # Over the limit? Sample footnotes go first, then links, least certain tracks first.
+    order = [i for _, i in sorted((e.confidence, i) for i, e, _ in numbered)]
+    drop = [(samples, i) for i in order if i in samples] + [(links, i) for i in order if i in links]
 
     def build() -> str:
         body = ["Tracklist:", *rows]
@@ -106,14 +109,28 @@ def description_text(
             body += [
                 f"{i}. {_clean(e.track.display)}: {links[i]}" for i, e, _ in numbered if i in links
             ]
+        if samples:
+            body += ["", "Samples:"]
+            body += [f"{i}. {samples[i]}" for i, _, _ in numbered if i in samples]
         body += ["", FOOTER]
         return "\n".join(body) + "\n"
 
     text = build()
-    while len(text) > limit and by_certainty:
-        links.pop(by_certainty.pop(0)[1])
+    while len(text) > limit and drop:
+        table, i = drop.pop(0)
+        table.pop(i)
         text = build()
     return text
+
+
+def sample_line(entry: Entry) -> str:
+    """'Floorplan - Never Grow Old samples Aretha Franklin - Never Grow Old (heard in the
+    mix)'. Recogniser guesses are marked, so nobody mistakes them for a credit."""
+    parts = []
+    for s in entry.samples:
+        how = "per MusicBrainz" if s.source == "MusicBrainz" else "possibly, heard in the mix"
+        parts.append(f"{s.track.display} ({how})")
+    return _clean(f"{entry.track.display} samples " + "; ".join(parts))
 
 
 def mixcloud_tracklist(sl: Setlist) -> str:
@@ -187,6 +204,11 @@ def markdown(sl: Setlist, min_conf: float) -> str:
             out += [e.note, ""]
             if e.note_sources:
                 out += ["<sub>Sources: " + ", ".join(e.note_sources) + "</sub>", ""]
+        if e.samples:
+            out += [
+                "Samples: " + "; ".join(f"{x.track.display} ({x.source})" for x in e.samples),
+                "",
+            ]
         if e.contenders and not e.is_unknown and e.confidence >= min_conf:
             out += ["Other candidates: " + "; ".join(c.display for c in e.contenders), ""]
     if sl.rejected:
@@ -213,14 +235,15 @@ Each paste file is plain text checked against its platform's rules: length limit
 `<` or `>`, and for YouTube the chapter rules (first timestamp 00:00, at least three,
 ascending, each chapter at least 10 seconds). If a check failed, `setlister` said so
 when it wrote the files. Every link is a confirmed page for that exact track; tracks
-without one have no link.
+without one have no link. "Samples" footnotes come from MusicBrainz, or are marked
+"possibly" when a recogniser heard the source inside the track; check those before posting.
 
 | File | Where it goes |
 |---|---|
 | `description.youtube.txt` | YouTube video description (5,000 characters max) |
 | `description.soundcloud.txt` | SoundCloud track description (4,000 characters max) |
 | `tracklist.mixcloud.txt` | Mixcloud upload, "paste tracklist" box |
-| `tracklist.md` | the full version: every link, confidence, a note per track |
+| `tracklist.md` | the full version: every link, confidence, samples, a note per track |
 | `setlist.json` | everything, machine readable |
 
 ## YouTube

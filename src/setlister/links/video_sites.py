@@ -1,28 +1,29 @@
-"""YouTube and SoundCloud: a search hit via yt-dlp, kept only if it names both artist and title."""
+"""YouTube and SoundCloud: search hits via yt-dlp, kept only if they name both artist and
+title. An upload by a channel named after the artist (theirs, or YouTube's 'Artist - Topic') is preferred; a fan's upload
+is used only when no official one turns up."""
 
 from __future__ import annotations
 
 import re
 
 from setlister.models import Link, TrackRef
-from setlister.sources.youtube import search_first
+from setlister.sources.youtube import search
 from setlister.textnorm import norm
 
 
 def find(track: TrackRef, site: str) -> Link | None:
-    hit = search_first(track.display, site)
-    if not hit:
-        return None
-    title = hit.get("title") or ""
-    uploader = hit.get("uploader") or hit.get("channel") or ""
-    if norm(track.title) not in norm(title):
-        return None
-    if not _names_artist(track.artist, f"{uploader} {title}"):
-        return None
-    if _other_version(title, track.title):
-        return None
-    url = hit.get("webpage_url") or hit.get("url")
-    return Link(site=site, url=url, exact=True) if url else None
+    fallback = None
+    for hit in search(track.display, site, 5):
+        title = hit.get("title") or ""
+        uploader = hit.get("uploader") or hit.get("channel") or ""
+        url = hit.get("webpage_url") or hit.get("url")
+        if not url or norm(track.title) not in norm(title) or _other_version(title, track.title):
+            continue
+        if _names_artist(track.artist, uploader):
+            return Link(site=site, url=url, exact=True)
+        if fallback is None and _names_artist(track.artist, title):
+            fallback = Link(site=site, url=url, exact=True)
+    return fallback
 
 
 _VERSION = re.compile(r"\b(remix|rmx|edit|rework|dub|vip|bootleg|live|cover|remaster)\b")
@@ -35,7 +36,7 @@ def _other_version(upload_title: str, track_title: str) -> bool:
 
 
 def _names_artist(artist: str, text: str) -> bool:
-    """True if any of the credited artists appears in the uploader or title."""
+    """True if any of the credited artists appears in the text."""
     text = norm(text)
     for name in artist.replace(" & ", ",").replace(" x ", ",").split(","):
         if norm(name) and norm(name) in text:

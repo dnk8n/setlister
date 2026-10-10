@@ -122,3 +122,31 @@ def test_local_paths_never_reach_the_output():
     t = TrackRef(artist="A", title="B", path="/Users/someone/dj/music/x.aiff")
     sl = Setlist(url="u", entries=[Entry(start=0, track=t, confidence=0.9)])
     assert "/Users/" not in sl.model_dump_json()
+
+
+def test_shazam_and_acoustid_agreeing_lifts_a_short_play_over_the_bar():
+    alone = resolve([ev("A", "One", 100, 150, 0.6, Source.SHAZAM)], duration=600)
+    assert all(e.is_unknown for e in alone)  # 50 s, one system: penalised and left out
+    agreed = resolve(
+        [
+            ev("A", "One", 100, 150, 0.4, Source.SHAZAM),
+            ev("A", "One", 104, 150, 0.3, Source.ACOUSTID),
+        ],
+        duration=600,
+    )
+    named = [e for e in agreed if not e.is_unknown]
+    assert named and named[0].confidence >= 0.9
+
+
+def test_a_sample_source_heard_inside_a_track_becomes_a_footnote():
+    entries = resolve(
+        [
+            ev("Floorplan", "Never Grow Old (Re-plant)", 0, 31, 0.6, Source.SHAZAM),
+            ev("Aretha Franklin", "Never Grow Old", 8, 20, 0.4, Source.SHAZAM),
+        ],
+        duration=31,
+        clip=True,
+    )
+    assert [e.track.artist for e in entries] == ["Floorplan"]
+    assert entries[0].samples[0].track.artist == "Aretha Franklin"
+    assert entries[0].samples[0].source == "heard in the mix"

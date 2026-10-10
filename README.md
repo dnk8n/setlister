@@ -34,7 +34,7 @@ answer, and only does heavy audio work for what is still unknown.
 | audio match | finds each of your local files inside the recording, even when you changed its tempo; aligns your original recording with a trimmed online copy | ~10 s per track on a laptop CPU |
 | recognise | fingerprints the stretches nothing explained (Shazam via shazamio, [AcoustID]) | network calls |
 | resolve | merges all evidence, keeps play order consistent, gives confidence and up to 3 contenders when unsure (`ID?`) | instant |
-| enrich | Bandcamp, Discogs, SoundCloud and YouTube links; a short note per track from [MusicBrainz]/Discogs facts; optionally (`--llm-notes`) written up by your [Claude Code] login, a local LLM ([Ollama] + Qwen) or any [LiteLLM] provider | network calls |
+| enrich | confirmed Bandcamp, Discogs, SoundCloud and YouTube pages (the artist's own upload preferred, a fan upload only if nothing else); sample sources; a short note per track from [MusicBrainz]/Discogs facts; optionally (`--llm-notes`) written up by your [Claude Code] login, a local LLM ([Ollama] + Qwen) or any [LiteLLM] provider | network calls |
 
 Everything works with **free** services by default. Paid ones are opt-in (see
 [docs/providers.md](docs/providers.md)).
@@ -75,7 +75,10 @@ Results land in `out/<set-name>/` with a README explaining where to paste what.
 - **Cheap before expensive.** Text and metadata first; downloads and fingerprinting only for
   what is still unexplained.
 - **Honest output.** Every row carries a confidence. Below the threshold it reads
-  `ID? (A / B / C)`, never a confident guess.
+  `ID? (A / B / C)`, never a confident guess. Two audio systems (Shazam, AcoustID, a
+  local file match) naming the same track lifts it to at least 90%; a play of a minute or
+  less heard by only one is probably a mismatch. Sample sources are footnoted, marked
+  "possibly" unless MusicBrainz records them.
 - **Reuse over reinvention.** yt-dlp, librosa, Chromaprint/AcoustID, MusicBrainz, the Discogs
   client, LiteLLM and Ollama do the heavy lifting. New code is limited to what didn't exist:
   tempo-tolerant matching of known tracks inside a mix, evidence resolution, and the glue.

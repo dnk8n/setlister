@@ -5,6 +5,11 @@ Rules, in plain words:
   * When two different tracks claim the same stretch, the more confident one wins and the
     other becomes a "contender" for that stretch.
   * Overlapping neighbours (a DJ transition) are split at the middle of the overlap.
+  * Two independent audio systems (Shazam, AcoustID, a local file match) agreeing on a track
+    is strong evidence: such rows get at least `CONSENSUS` confidence and no short-play
+    penalty.
+  * A detection inside a track's stretch whose title is that track's title by another
+    artist is the sample source, not a separate track: it becomes a footnote.
   * Detections spanning a minute or less are heavily penalised (DJs rarely play a track that
     briefly), and named rows that end up below `min_confidence` are left out of the list.
   * A gap of more than `min_gap` seconds that nothing explains becomes an "ID" row, listing
@@ -15,7 +20,9 @@ Rules, in plain words:
 
 from __future__ import annotations
 
-from setlister.models import Entry, Evidence, TrackRef
+import re
+
+from setlister.models import Entry, Evidence, Sample, Source, TrackRef
 from setlister.textnorm import norm, similarity
 
 SAME_TRACK = 0.8
@@ -23,6 +30,8 @@ MIN_ROW_SECONDS = 20.0
 SHORT_PLAY = 60.0  # seconds; a detection this short is heavily penalised
 SHORT_PLAY_FULL = 120.0  # no penalty from here on
 SHORT_PLAY_FACTOR = 0.3
+AUDIO_SOURCES = {Source.SHAZAM, Source.ACOUSTID, Source.LOCAL_MATCH}
+CONSENSUS = 0.9
 
 
 def same_track(a: TrackRef, b: TrackRef) -> bool:
@@ -130,9 +139,13 @@ def resolve(
                 )
             )
 
+    _attach_samples(entries, weak)
     for entry in entries:
-        factor = 1.0 if clip else short_play_factor(entry, duration)
+        agreed = consensus(entry)
+        factor = 1.0 if clip or agreed else short_play_factor(entry, duration)
         entry.confidence = round(entry.confidence * factor, 3)
+        if agreed:
+            entry.confidence = max(entry.confidence, CONSENSUS)
     dropped = [e for e in entries if e.confidence < min_confidence]
     entries = [e for e in entries if e.confidence >= min_confidence]
     if rejected is not None:
@@ -153,6 +166,52 @@ def resolve(
     for entry in entries:
         entry.contenders = entry.contenders[:max_contenders]
     return entries
+
+
+def consensus(entry: Entry) -> bool:
+    """Did two independent audio systems name this track?"""
+    return len(AUDIO_SOURCES.intersection(entry.sources)) >= 2
+
+
+def _base_title(title: str) -> str:
+    """'Never Grow Old (Re-plant)' -> 'never grow old'."""
+    return norm(re.sub(r"[\(\[].*?[\)\]]", " ", title))
+
+
+def is_sample_of(source: TrackRef, track: TrackRef) -> bool:
+    """Same title, different artist: Aretha Franklin's 'Never Grow Old' inside Floorplan's
+    'Never Grow Old (Re-plant)'."""
+    a, b = _base_title(source.title), _base_title(track.title)
+    if not a or a != b:
+        return False
+    sa, sb = set(norm(source.artist).split()), set(norm(track.artist).split())
+    return bool(sa) and not (sa & sb)
+
+
+def _attach_samples(entries: list[Entry], weak: list[Evidence]) -> None:
+    """Weaker detections near a track that are its sample source become footnotes."""
+    for e in sorted(entries, key=lambda x: x.confidence, reverse=True):
+        if e not in entries:
+            continue
+        lo, hi = e.start - 30, (e.end if e.end is not None else e.start + 60) + 30
+        for other in [x for x in entries if x is not e and x.confidence <= e.confidence]:
+            if lo <= other.start <= hi and is_sample_of(other.track, e.track):
+                add_sample(e, other.track)
+                entries.remove(other)
+        for w in list(weak):
+            if w.start is not None and lo <= w.start <= hi and is_sample_of(w.track, e.track):
+                add_sample(e, w.track)
+                weak.remove(w)
+
+
+def add_sample(entry: Entry, track: TrackRef, source: str = "heard in the mix") -> None:
+    """Add a footnote once; a MusicBrainz relation outranks a recogniser's guess."""
+    for s in entry.samples:
+        if same_track(s.track, track):
+            if source == "MusicBrainz":
+                s.source = source
+            return
+    entry.samples.append(Sample(track=track.model_copy(), source=source))
 
 
 def short_play_factor(entry: Entry, duration: float | None) -> float:

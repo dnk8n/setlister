@@ -74,6 +74,14 @@ class Link(BaseModel):
     exact: bool = False  # False = a search URL, True = a page for this exact track/release
 
 
+class Sample(BaseModel):
+    """Material this track samples. `source` says how we know: "MusicBrainz" (a curated
+    relation) or "heard in the mix" (a recogniser named it inside this track's stretch)."""
+
+    track: TrackRef
+    source: str
+
+
 class Entry(BaseModel):
     start: float
     end: float | None = None
@@ -81,6 +89,7 @@ class Entry(BaseModel):
     confidence: float
     sources: list[Source] = []
     contenders: list[TrackRef] = []  # alternatives when unsure
+    samples: list[Sample] = []
     links: list[Link] = []
     note: str | None = None
     note_sources: list[str] = []
