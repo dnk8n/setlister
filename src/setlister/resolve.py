@@ -83,9 +83,16 @@ def resolve(
     max_contenders: int = 3,
     min_confidence: float = 0.5,
     rejected: list[Entry] | None = None,
+    clip: bool = False,
 ) -> list[Entry]:
     """Evidence -> setlist rows. Named rows below `min_confidence` (after the short-play
-    penalty) are left out of the list and appended to `rejected`, if given."""
+    penalty) are left out of the list and appended to `rejected`, if given.
+
+    `clip` is for highlight reels: every piece is seconds long by design, so there is no
+    short-play penalty and rows only a few seconds long are kept."""
+    min_row = 3.0 if clip else MIN_ROW_SECONDS
+    if clip:
+        min_gap = min(min_gap, 10.0)
     timed = [e for e in evidence if e.start is not None]
     timed.sort(key=lambda e: e.confidence, reverse=True)
     entries: list[Entry] = []
@@ -124,7 +131,8 @@ def resolve(
             )
 
     for entry in entries:
-        entry.confidence = round(entry.confidence * short_play_factor(entry, duration), 3)
+        factor = 1.0 if clip else short_play_factor(entry, duration)
+        entry.confidence = round(entry.confidence * factor, 3)
     dropped = [e for e in entries if e.confidence < min_confidence]
     entries = [e for e in entries if e.confidence >= min_confidence]
     if rejected is not None:
@@ -133,7 +141,7 @@ def resolve(
     entries.sort(key=lambda x: x.start)
     _split_transitions(entries)
     entries = _fill_gaps(entries, duration, min_gap)
-    entries = _drop_slivers(entries)
+    entries = _drop_slivers(entries, min_row)
 
     for w in weak:
         for entry in entries:

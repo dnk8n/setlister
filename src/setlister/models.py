@@ -21,7 +21,9 @@ class TrackRef(BaseModel):
     bpm: float | None = None
     key: str | None = None
     duration: float | None = None
-    path: str | None = None  # local file, e.g. from a rekordbox history
+    # Local file (e.g. from a rekordbox history). Never written to output: it reveals the
+    # DJ's own folders, and setlist.json may be shared.
+    path: str | None = Field(default=None, exclude=True)
     musicbrainz_recording_id: str | None = None
     isrc: str | None = None
     discogs_release_id: str | None = None

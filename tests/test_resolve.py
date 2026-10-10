@@ -103,3 +103,22 @@ def test_zero_length_rows_are_folded_into_neighbours():
     assert starts == sorted(set(starts)) and starts[0] == 0
     assert all((e.end or 600) - e.start >= 20 for e in entries)
     assert entries[0].track.title == "One" and entries[0].contenders[0].title == "Sliver"
+
+
+def test_clips_keep_short_rows_without_the_short_play_penalty():
+    evidence = [
+        ev("A", "One", 0, 12, 0.8),
+        ev("B", "Two", 12, 22, 0.8),
+        ev("C", "Three", 22, 34, 0.8),
+    ]
+    rows = resolve(evidence, duration=34, clip=True)
+    assert [r.track.title for r in rows] == ["One", "Two", "Three"]
+    assert all(r.confidence == 0.8 for r in rows)
+
+
+def test_local_paths_never_reach_the_output():
+    from setlister.models import Entry, Setlist, TrackRef
+
+    t = TrackRef(artist="A", title="B", path="/Users/someone/dj/music/x.aiff")
+    sl = Setlist(url="u", entries=[Entry(start=0, track=t, confidence=0.9)])
+    assert "/Users/" not in sl.model_dump_json()

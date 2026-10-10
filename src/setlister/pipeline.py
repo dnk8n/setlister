@@ -157,6 +157,11 @@ def run(inputs: RunInputs, cfg: Config) -> tuple[Setlist, Path]:
                         options[i].append(pieces[0])
                         more_pieces[id(pieces[0])] = pieces[1:]
             chosen = pick_in_order(options)
+            if slack == 0.0:  # a clip: placements rest on seconds of audio, so weigh them less
+                for c in chosen:
+                    c.confidence = round(c.confidence * 0.7, 3)
+                    for p in more_pieces.get(id(c), []):
+                        p.confidence = c.confidence
             evidence += chosen
             evidence += [p for c in chosen for p in more_pieces.get(id(c), [])]
             console.print(f"  placed {len(chosen)} of {len(files)}")
@@ -174,6 +179,10 @@ def run(inputs: RunInputs, cfg: Config) -> tuple[Setlist, Path]:
             evidence += recognise_gaps(
                 recording, rec_feat.duration, evidence, cfg, to_online, clip_ranges
             )
+            if clip_ranges and online_path:
+                # Also listen to the clip itself: a direct match beats one carried over from
+                # the original through a few seconds of alignment.
+                evidence += recognise_gaps(online_path, on_feat.duration, [], cfg, lambda t: t)
 
     # History tracks we couldn't place still count as "played, time unknown".
     placed = {e.order for e in evidence if e.source == Source.LOCAL_MATCH}
@@ -188,6 +197,7 @@ def run(inputs: RunInputs, cfg: Config) -> tuple[Setlist, Path]:
         max_contenders=cfg.identify.max_contenders,
         min_confidence=cfg.output.min_confidence_to_name,
         rejected=rejected,
+        clip=bool(duration and duration < CLIP_SECONDS),
     )
     suggest_from_history(entries, evidence, history, unplaced, cfg.identify.max_contenders)
 
@@ -219,7 +229,7 @@ def run(inputs: RunInputs, cfg: Config) -> tuple[Setlist, Path]:
     )
     named = [e.track for e in entries if not e.is_unknown]
     unplaced = [t for t in unplaced if not any(same_track(t, n) for n in named)]
-    if unplaced:
+    if unplaced and not (duration and duration < CLIP_SECONDS):  # a clip skips most tracks
         sl.offset_note = (
             (sl.offset_note or "") + " Also in the DJ history but not heard in this "
             "recording: " + "; ".join(t.display for t in unplaced) + "."
