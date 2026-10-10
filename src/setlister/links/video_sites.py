@@ -19,11 +19,29 @@ def find(track: TrackRef, site: str) -> Link | None:
         url = hit.get("webpage_url") or hit.get("url")
         if not url or norm(track.title) not in norm(title) or _other_version(title, track.title):
             continue
+        if _JUNK.search(norm(f"{title} {url}")):
+            continue
         if _names_artist(track.artist, uploader):
             return Link(site=site, url=url, exact=True)
-        if fallback is None and _names_artist(track.artist, title):
+        if fallback is None and _names_artist(track.artist, title) and _plain(title, track):
             fallback = Link(site=site, url=url, exact=True)
     return fallback
+
+
+# Re-uploads that are not the record as released.
+_JUNK = re.compile(
+    r"\b(sped up|speed up|slowed|reverb|nightcore|bass boosted|8d|tik ?tok|blend|mash ?up|"
+    r"yt1s\w*|mp3|free download|reupload|re upload)\b"
+)
+_HARMLESS = {"original", "mix", "official", "audio", "video", "hd", "hq", "premiere", "feat", "ft"}
+
+
+def _plain(upload_title: str, track: TrackRef) -> bool:
+    """A fan upload is kept only if its title is just artist and title (plus words like
+    'Original Mix'): 'Bring It Back x Renegade Master' is a mashup, not the track."""
+    known = set(norm(f"{track.artist} {track.title}").split()) | _HARMLESS
+    extra = [w for w in norm(upload_title).split() if w not in known]
+    return len(extra) <= 1
 
 
 _VERSION = re.compile(r"\b(remix|rmx|edit|rework|dub|vip|bootleg|live|cover|remaster)\b")

@@ -120,3 +120,18 @@ def test_musicbrainz_sample_relations_are_read_forwards_only():
         ]
     }
     assert [t.display for t in sampled(rec)] == ["Aretha Franklin - Never Grow Old"]
+
+
+def test_mashups_and_sped_up_rips_are_never_used(monkeypatch):
+    sosa = TrackRef(artist="Sosa UK", title="Bring It Back")
+    mashup = {
+        "title": "Sosa UK - Bring It Back x Renegade Master (DJ C Blend) TIK TOK BASS BOOSTED",
+        "uploader": "realxrc",
+        "webpage_url": "https://soundcloud.com/realxrc/sosa-uk-bring-it-back-x-renegade-master",
+    }
+    padded = {"title": "Sosa UK - Bring It Back x Renegade Master", "uploader": "a", "url": "p"}
+    plain = {"title": "Sosa UK - Bring It Back (Original Mix)", "uploader": "b", "url": "ok"}
+    monkeypatch.setattr(video_sites, "search", lambda q, site, n: [mashup, padded, plain])
+    assert video_sites.find(sosa, "soundcloud").url == "ok"
+    monkeypatch.setattr(video_sites, "search", lambda q, site, n: [mashup, padded])
+    assert video_sites.find(sosa, "soundcloud") is None

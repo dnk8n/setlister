@@ -31,8 +31,9 @@ PROMPT = """You write liner-note style blurbs for a DJ set tracklist.
 Write ONE paragraph of at most {max_words} words about the track below that a listener would
 find interesting (origin, label, scene, sample, the artist's story, how it was received).
 Use ONLY the facts provided; if they are thin, keep it short and do not invent anything.
-No hype words, no emojis, no preamble. Never mention the facts, their limits or these
-instructions. Plain text only.
+Do not interpret or speculate about what the title or artist name suggests. No hype words,
+no emojis, no preamble. Never mention the facts, their limits or these instructions. Plain
+text only.
 
 Track: {display}
 Facts (JSON): {facts}
