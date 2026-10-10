@@ -446,7 +446,9 @@ def recognise_gaps(
         win, step_s = CLIP_WINDOW, CLIP_STEP
         starts, ends = [a for a, _ in clip_ranges], [b for _, b in clip_ranges]
     elif rec_duration < CLIP_SECONDS:  # ...unless it's a short clip: then check all of it
-        win, step_s = min(CLIP_WINDOW, rec_duration), CLIP_STEP
+        win = min(CLIP_WINDOW, rec_duration)
+        # Very short reels change track every few seconds: overlap the windows more.
+        step_s = CLIP_STEP if rec_duration >= 60 else CLIP_STEP / 2
         starts = [0.0]
     times = []
     for t, end in zip(starts, ends, strict=True):
@@ -457,6 +459,8 @@ def recognise_gaps(
             if on is not None and not any(s - 10 <= on <= e - 10 for s, e in covered):
                 times.append(t)
             t += step_s
+    if rec_duration < CLIP_SECONDS and not clip_ranges and rec_duration - win not in times:
+        times.append(max(0.0, rec_duration - win))  # the clip's last seconds too
     if not times:
         return []
     step(
