@@ -50,15 +50,29 @@ def find_recording(track: TrackRef) -> dict | None:
                 return mb.get_recording_by_id(r["id"], includes=includes)["recording"]
         if track.title:
             _throttle()
-            res = mb.search_recordings(recording=track.title, artist=track.artist, limit=5)
-            for r in res.get("recording-list", []):
-                name = f"{r.get('artist-credit-phrase', '')} - {r.get('title', '')}"
-                if similarity(name, track.display) > 0.75:
-                    _throttle()
-                    return mb.get_recording_by_id(r["id"], includes=includes)["recording"]
+            res = mb.search_recordings(recording=track.title, artist=track.artist, limit=10)
+            matches = [r for r in res.get("recording-list", []) if is_same(r, track)]
+            if matches:
+                # Several recordings often match (album, single, compilation): take the
+                # earliest release so facts are the same on every run.
+                best = min(matches, key=_first_date)
+                _throttle()
+                return mb.get_recording_by_id(best["id"], includes=includes)["recording"]
     except mb.WebServiceError as e:
         log.debug("musicbrainz: %s", e)
     return None
+
+
+def is_same(rec: dict, track: TrackRef) -> bool:
+    """Both artist and title must match closely: 'Raz Fresco - Vanilla Skies' is not
+    'Dan Fresco - Vanilla'."""
+    artist_ok = similarity(rec.get("artist-credit-phrase", ""), track.artist) >= 0.9
+    return artist_ok and similarity(rec.get("title", ""), track.title) >= 0.85
+
+
+def _first_date(rec: dict) -> str:
+    dates = [r["date"] for r in rec.get("release-list", []) if r.get("date")]
+    return min(dates, default="9999") + rec.get("id", "")
 
 
 def facts_and_links(rec: dict) -> tuple[dict, list[Link]]:

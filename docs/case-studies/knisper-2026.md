@@ -326,3 +326,13 @@ prompt, and about 3 minutes with the second.
    2 tracks, from its own audio only, using 5-second steps.
 6. **Keys must be the right kind.** An AcoustID *user* key looks valid but is rejected for
    lookups. `doctor` now tests the key with one request.
+
+## Changed since these runs
+
+- The `NONE` instruction was dropped from the notes prompt, because it made Haiku decline
+  tracks with good facts. Refusals are still caught, and tracks with no facts still skip
+  the model.
+- MusicBrainz matches now need both the artist and the title to agree closely. When
+  several recordings match, the one with the earliest release is used, so *Dan Fresco -
+  Vanilla* is no longer described as Raz Fresco's record and years stay the same from run
+  to run.

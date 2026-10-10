@@ -90,3 +90,13 @@ def test_tidy_duplicate_mix_name():
         TrackRef(artist="A", title="You Might Wanna (Club Mix) [Club Mix]").title
         == "You Might Wanna (Club Mix)"
     )
+
+
+def test_musicbrainz_match_needs_artist_and_title():
+    from setlister.identify.musicbrainz import is_same
+    from setlister.models import TrackRef
+
+    t = TrackRef(artist="Dan Fresco", title="Vanilla")
+    assert not is_same({"artist-credit-phrase": "Raz Fresco", "title": "Vanilla Skies"}, t)
+    assert not is_same({"artist-credit-phrase": "Raz Fresco", "title": "Vanilla"}, t)
+    assert is_same({"artist-credit-phrase": "Dan Fresco", "title": "Vanilla"}, t)

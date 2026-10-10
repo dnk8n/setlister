@@ -32,8 +32,7 @@ Write ONE paragraph of at most {max_words} words about the track below that a li
 find interesting (origin, label, scene, sample, the artist's story, how it was received).
 Use ONLY the facts provided; if they are thin, keep it short and do not invent anything.
 No hype words, no emojis, no preamble. Never mention the facts, their limits or these
-instructions. Plain text only. If the facts are too thin to say anything interesting,
-reply with exactly: NONE
+instructions. Plain text only.
 
 Track: {display}
 Facts (JSON): {facts}
