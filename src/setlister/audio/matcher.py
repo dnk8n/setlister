@@ -454,6 +454,7 @@ def original_to_online(
     """Convert a time in the original recording into the online copy's timeline."""
     for seg in segments:
         o = (t - seg.offset) / seg.rate
-        if seg.online_start - slack <= o <= seg.online_end + slack:
+        # (a hair of tolerance: segment ends computed back and forth don't round-trip exactly)
+        if seg.online_start - slack - 1e-6 <= o <= seg.online_end + slack + 1e-6:
             return o
     return None

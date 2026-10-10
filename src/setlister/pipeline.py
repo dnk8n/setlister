@@ -469,12 +469,13 @@ def recognise_gaps(
         # A reel's piece is seconds of a longer play. The original recording has the whole
         # play, so also listen to a full-length window around the piece: a second, independent
         # observation of the same track (credited to the piece's span only).
-        # (Only the piece's start is mapped: its end can fall a hair outside the segment.)
-        on_a = to_online(a)
-        if on_a is None:
+        # Map the piece's middle: its exact ends sit on segment boundaries.
+        on_mid = to_online((a + b) / 2)
+        if on_mid is None:
             console.print(f"  [yellow]reel piece at original {format_timestamp(a)} did not map[/]")
             continue
-        on_b = on_a + max(b - a, 3.0)
+        half = max(b - a, 3.0) / 2
+        on_a, on_b = max(0.0, on_mid - half), on_mid + half
         long_win = cfg.identify.window_seconds
         cut = max(0.0, min((a + b) / 2 - long_win / 2, rec_duration - long_win))
         console.print(
