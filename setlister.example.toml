@@ -13,6 +13,7 @@ max_tempo_change = 0.08      # ±8% playback speed search when matching local fi
 [identify]
 acoustid = true              # free; needs `brew install chromaprint` and a free key
 shazam = true                # free but unofficial (shazamio); set false to opt out
+shazam_pace_seconds = 4.0    # seconds between Shazam requests; faster risks an IP block
 window_seconds = 20.0
 step_seconds = 30.0
 max_contenders = 3

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Protocol
 
@@ -23,6 +24,10 @@ class RecognizerError(Exception):
     empty result, this is not cached and counts towards giving up on the service."""
 
 
+class PermanentRecognizerError(RecognizerError):
+    """Retrying cannot help (e.g. the key was rejected): stop using the service at once."""
+
+
 class Recognizer(Protocol):
     name: Source
 
@@ -34,17 +39,30 @@ class Recognizer(Protocol):
 
 
 class CachedRecognizer:
-    """Remembers every answer on disk, keyed by the excerpt's bytes, so a re-run never asks a
-    service the same question twice. After `give_up_after` failures in a row the service is
-    skipped for the rest of the run instead of slowing it down."""
+    """Remembers every answer on disk (matches and "no match" alike), keyed by the excerpt's
+    bytes, so a re-run never asks a service the same question twice.
 
-    def __init__(self, inner: Recognizer, cache_dir: Path, give_up_after: int = 3):
+    When the service fails (rate limit, outage) it waits and tries again, with each wait in
+    `backoff` longer than the last; once those are used up the service is skipped for the
+    rest of the run. A rejected key stops it at once."""
+
+    def __init__(
+        self,
+        inner: Recognizer,
+        cache_dir: Path,
+        *,
+        pace_seconds: float = 0.0,
+        backoff: tuple[float, ...] = (60.0, 180.0),
+        on_wait=None,
+    ):
         self.inner, self.name = inner, inner.name
         self.dir = cache_dir / "recognitions" / inner.name.value
-        self.give_up_after = give_up_after
-        self.failures_in_a_row = 0
+        self.pace, self.backoff = pace_seconds, backoff
+        self.on_wait = on_wait or (lambda seconds, why: None)
+        self._last_call = 0.0
         self.asked = self.cached = self.failed = 0
         self.gave_up = False
+        self.reason = ""
 
     def available(self) -> tuple[bool, str]:
         return self.inner.available()
@@ -56,27 +74,47 @@ class CachedRecognizer:
             return [(TrackRef(**r), s) for r, s in json.loads(path.read_text())]
         if self.gave_up:
             return []
+        for wait in (*self.backoff, None):
+            found = self._ask(wav)
+            if found is not None:
+                self.dir.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    json.dumps([(r.model_dump(exclude_none=True), s) for r, s in found])
+                )
+                return found
+            if self.gave_up:
+                return []
+            if wait is None:
+                break
+            self.on_wait(wait, self.reason)
+            time.sleep(wait)
+        self.gave_up = True
+        self.reason = f"still failing after backing off ({self.reason}); try again later"
+        return []
+
+    def _ask(self, wav: Path) -> list[tuple[TrackRef, float]] | None:
+        delay = self._last_call + self.pace - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+        self._last_call = time.monotonic()
         self.asked += 1
         try:
-            found = self.inner.recognize(wav)
+            return self.inner.recognize(wav)
+        except PermanentRecognizerError as e:
+            self.failed += 1
+            self.gave_up, self.reason = True, str(e)
         except RecognizerError as e:
             self.failed += 1
-            self.failures_in_a_row += 1
+            self.reason = str(e)
             log.info("%s failed: %s", self.name.value, e)
-            if self.failures_in_a_row >= self.give_up_after:
-                self.gave_up = True
-            return []
-        self.failures_in_a_row = 0
-        self.dir.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps([(r.model_dump(exclude_none=True), s) for r, s in found]))
-        return found
+        return None
 
     def summary(self) -> str:
         s = f"{self.name.value}: {self.asked} asked, {self.cached} from cache"
         if self.failed:
             s += f", {self.failed} failed"
         if self.gave_up:
-            s += ", gave up after repeated failures (probably rate limited; try again later)"
+            s += f", stopped: {self.reason}"
         return s
 
 

@@ -35,6 +35,9 @@ class AudioConfig(_Section):
 class IdentifyConfig(_Section):
     acoustid: bool = True
     shazam: bool = True  # free but unofficial API, see docs/providers.md
+    # Seconds between Shazam requests. Faster gets an IP blocked for hours (seen at 1 s).
+    # Answers are cached, so this cost is paid once per set.
+    shazam_pace_seconds: float = 4.0
     window_seconds: float = 20.0
     step_seconds: float = 30.0
     max_contenders: int = 3

@@ -365,7 +365,17 @@ def recognise_gaps(
     for r in recognizers(cfg):
         ok, why = r.available()
         if ok:
-            usable.append(CachedRecognizer(r, cfg.cache_dir))
+            pace = cfg.identify.shazam_pace_seconds if r.name == Source.SHAZAM else 0.0
+            usable.append(
+                CachedRecognizer(
+                    r,
+                    cfg.cache_dir,
+                    pace_seconds=pace,
+                    on_wait=lambda s, why, n=r.name.value: console.print(
+                        f"  [yellow]{n} failed ({why}); waiting {s:.0f} s before retrying[/]"
+                    ),
+                )
+            )
         else:
             console.print(f"  [yellow]skipping {r.name.value}[/]: {why}")
     if not usable:
@@ -422,9 +432,8 @@ def recognise_gaps(
                 found = r.recognize(wav)
                 if r.gave_up:
                     console.print(
-                        f"  [yellow]{r.name.value} keeps failing (probably rate limited); "
-                        "skipping it for the rest of this run. Re-run later: answers so far "
-                        "are cached.[/]"
+                        f"  [yellow]{r.name.value} skipped for the rest of this run: "
+                        f"{r.reason}. Answers so far are cached.[/]"
                     )
                 for ref, score in found[:2]:
                     on = to_online(t)

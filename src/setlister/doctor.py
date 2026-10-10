@@ -158,6 +158,20 @@ def run_checks(cfg: Config, *, network: bool = True) -> list[Check]:
             )
         )
     checks.append(_ollama(cfg))
+    if network and cfg.identify.acoustid and where_is("acoustid_key"):
+        from setlister.identify.acoustid_rec import key_problem
+        from setlister.secrets import get_secret
+
+        problem = key_problem(get_secret("acoustid_key") or "")
+        checks.append(
+            Check(
+                "AcoustID key accepted",
+                problem is None,
+                False,
+                "accepted" if problem is None else "rejected by AcoustID",
+                problem or "",
+            )
+        )
     if network:
         for name, url in [
             ("YouTube", "https://www.youtube.com"),

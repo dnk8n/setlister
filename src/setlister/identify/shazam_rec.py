@@ -9,13 +9,10 @@ set `identify.shazam = false` to opt out.
 from __future__ import annotations
 
 import asyncio
-import time
 from pathlib import Path
 
 from setlister.identify import RecognizerError
 from setlister.models import Source, TrackRef
-
-PACE_SECONDS = 1.0  # be gentle: Shazam rate limits heavy use
 
 
 class ShazamRecognizer:
@@ -43,7 +40,6 @@ class ShazamRecognizer:
             fn = getattr(shazam, "recognize", None) or shazam.recognize_song
             return await fn(str(wav))
 
-        time.sleep(PACE_SECONDS)
         try:
             res = asyncio.run(go())
         except Exception as e:
