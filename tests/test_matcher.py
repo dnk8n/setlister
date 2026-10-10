@@ -70,3 +70,28 @@ def test_align_sped_up_reupload():
     assert segs and abs(segs[0].rate - 1.04) <= 0.0051
     # 200 s into the original is (200 - 20) / 1.04 s into the online copy
     assert abs(original_to_online(200.0, segs) - 180 / 1.04) < 1.5
+
+
+def test_highlight_reel_pieces_are_found_in_the_original():
+    from setlister.audio.matcher import align_clip, original_span_to_online
+
+    original = np.concatenate(
+        [synth_track(21, 200, 124), synth_track(22, 200, 128), synth_track(23, 200, 126)]
+    )
+    cuts = [(50, 62), (260, 270), (480, 492)]  # 12 s, 10 s and 12 s from three tracks
+    reel = np.concatenate([original[int(a * SR) : int(b * SR)] for a, b in cuts])
+    segs = align_clip(MixIndex(logmel(original, SR)), logmel(reel, SR))
+    starts = [s.online_start * s.rate + s.offset for s in segs]
+    for a, _ in cuts:
+        assert any(abs(st - a) < 5 for st in starts), (a, starts)
+    # the second track (200-400 s in the original) shows up 12-22 s into the reel
+    (piece,) = original_span_to_online(200, 400, segs)
+    assert abs(piece[0] - 12) < 3 and abs(piece[1] - 22) < 3
+
+
+def test_clip_from_elsewhere_is_not_placed_in_the_original():
+    from setlister.audio.matcher import align_clip
+
+    original = np.concatenate([synth_track(21, 200, 124), synth_track(22, 200, 128)])
+    other = synth_track(31, 40, 125)
+    assert align_clip(MixIndex(logmel(original, SR)), logmel(other, SR)) == []

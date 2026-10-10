@@ -384,6 +384,7 @@ def align(
     step_seconds: float = 60.0,
     min_ncc: float = 0.5,
     min_margin: float = 0.08,
+    probe_rate: bool = True,
 ) -> list[AlignmentSegment]:
     """Map the online copy onto the original recording. Handles trims, cuts and a copy that
     was uploaded at a slightly different speed."""
@@ -393,7 +394,7 @@ def align(
     points, tried = _align_points(
         original, _flux(online.logmel), fps, win, step, min_ncc, min_margin
     )
-    if len(points) < 0.3 * tried:
+    if probe_rate and len(points) < 0.3 * tried:
         probed = _probe_rate(original, online, win)
         if abs(probed - 1.0) > 1e-6:
             flux = _flux(stretch(online.logmel, 1 / probed))
@@ -410,6 +411,41 @@ def align(
         else:
             segments.append(AlignmentSegment(t, t + window_seconds / rate, off, rate))
     return segments
+
+
+CLIP_SECONDS = 300.0  # an upload shorter than this is treated as a clip / highlight reel
+
+
+def align_clip(original: MixIndex, clip: Features) -> list[AlignmentSegment]:
+    """Find where each piece of a short clip (e.g. a highlight reel cut every few seconds)
+    comes from in the original recording.
+
+    Short windows and a high similarity bar. No uniqueness margin: within one loop-based
+    track several bars match almost equally, and any of them names the right track."""
+    return align(
+        original,
+        clip,
+        window_seconds=8.0,
+        step_seconds=4.0,
+        min_ncc=0.7,
+        min_margin=0.0,
+        probe_rate=False,
+    )
+
+
+def original_span_to_online(
+    start: float, end: float, segments: list[AlignmentSegment], *, min_seconds: float = 2.0
+) -> list[tuple[float, float]]:
+    """The parts of [start, end] in the original that made it into the online copy, in the
+    online copy's timeline (one piece per segment it overlaps)."""
+    pieces = []
+    for seg in segments:
+        o_start = seg.online_start * seg.rate + seg.offset
+        o_end = seg.online_end * seg.rate + seg.offset
+        s, e = max(start, o_start), min(end, o_end)
+        if e - s >= min_seconds:
+            pieces.append(((s - seg.offset) / seg.rate, (e - seg.offset) / seg.rate))
+    return pieces
 
 
 def original_to_online(

@@ -157,21 +157,17 @@ def run_checks(cfg: Config, *, network: bool = True) -> list[Check]:
                 f"get one free at {spec.signup_url}, then: setlister config set {spec.name}",
             )
         )
-    checks.append(_ollama(cfg))
     if network and cfg.identify.acoustid and where_is("acoustid_key"):
         from setlister.identify.acoustid_rec import key_problem
         from setlister.secrets import get_secret
 
         problem = key_problem(get_secret("acoustid_key") or "")
-        checks.append(
-            Check(
-                "AcoustID key accepted",
-                problem is None,
-                False,
-                "accepted" if problem is None else "rejected by AcoustID",
-                problem or "",
-            )
-        )
+        row = next(c for c in checks if c.name == "key: acoustid_key")
+        if problem:
+            row.ok, row.detail, row.fix = False, "set, but rejected by AcoustID", problem
+        else:
+            row.detail = row.detail.replace("found in", "accepted; found in", 1)
+    checks.append(_ollama(cfg))
     if network:
         for name, url in [
             ("YouTube", "https://www.youtube.com"),

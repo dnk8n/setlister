@@ -60,3 +60,17 @@ def test_youtube_check_catches_chapter_problems():
         "0:05 A\n1:00 B\n2:00 C\n", "youtube"
     )
     assert check_paste("0:00 A\n0:05 B\n2:00 C\n", "youtube")
+
+
+def test_folder_names_stay_unique_for_uploads_with_similar_titles():
+    from setlister.output import folder_name
+
+    a = folder_name(
+        "The Adventures of Pepper and Pumpernickl - Knisper Festival 2026 full 2hr DJ set",
+        "omxI8_CGaSs",
+    )
+    b = folder_name(
+        "The Adventures of Pepper and Pumpernickl - Knisper Festival 2026 highlight reel",
+        "d__gZC1iRnI",
+    )
+    assert a != b and a.endswith("-omxI8_CGaSs") and not a.split("-omxI8")[0].endswith("-")

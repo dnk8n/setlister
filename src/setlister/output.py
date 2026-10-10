@@ -23,9 +23,17 @@ SITE_NAMES = {
 }
 
 
-def slug(text: str) -> str:
+def slug(text: str, max_len: int = 50) -> str:
     s = re.sub(r"[^\w\s-]", "", text.lower()).strip()
-    return re.sub(r"[\s_-]+", "-", s)[:60] or "set"
+    s = re.sub(r"[\s_-]+", "-", s)
+    if len(s) > max_len:
+        s = s[:max_len].rsplit("-", 1)[0]  # cut at a word boundary
+    return s or "set"
+
+
+def folder_name(title: str, video_id: str | None) -> str:
+    """Readable and unique: uploads of one event often share most of their title."""
+    return f"{slug(title)}-{video_id}" if video_id else slug(title)
 
 
 def short_label(entry: Entry) -> str:
