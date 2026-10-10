@@ -5,9 +5,9 @@ Rules, in plain words:
   * When two different tracks claim the same stretch, the more confident one wins and the
     other becomes a "contender" for that stretch.
   * Overlapping neighbours (a DJ transition) are split at the middle of the overlap.
-  * Two independent audio systems (Shazam, AcoustID, a local file match) agreeing on a track
-    is strong evidence: such rows get at least `CONSENSUS` confidence and no short-play
-    penalty.
+  * Two independent systems agreeing on a track is strong evidence: two of Shazam, AcoustID
+    and a local file match, or a recogniser naming a track the DJ's history says was played.
+    Such rows get at least `CONSENSUS` confidence and no short-play penalty.
   * A detection inside a track's stretch whose title is that track's title by another
     artist is the sample source, not a separate track: it becomes a footnote.
   * Detections spanning a minute or less are heavily penalised (DJs rarely play a track that
@@ -93,12 +93,14 @@ def resolve(
     min_confidence: float = 0.5,
     rejected: list[Entry] | None = None,
     clip: bool = False,
+    played: list[TrackRef] | None = None,
 ) -> list[Entry]:
     """Evidence -> setlist rows. Named rows below `min_confidence` (after the short-play
     penalty) are left out of the list and appended to `rejected`, if given.
 
     `clip` is for highlight reels: every piece is seconds long by design, so there is no
-    short-play penalty and rows only a few seconds long are kept."""
+    short-play penalty and rows only a few seconds long are kept. `played` is the DJ's history
+    (untimed): a recogniser naming one of those tracks counts as agreement."""
     min_row = 3.0 if clip else MIN_ROW_SECONDS
     if clip:
         min_gap = min(min_gap, 10.0)
@@ -141,7 +143,7 @@ def resolve(
 
     _attach_samples(entries, weak)
     for entry in entries:
-        agreed = consensus(entry)
+        agreed = consensus(entry, played)
         factor = 1.0 if clip or agreed else short_play_factor(entry, duration)
         entry.confidence = round(entry.confidence * factor, 3)
         if agreed:
@@ -168,9 +170,13 @@ def resolve(
     return entries
 
 
-def consensus(entry: Entry) -> bool:
-    """Did two independent audio systems name this track?"""
-    return len(AUDIO_SOURCES.intersection(entry.sources)) >= 2
+def consensus(entry: Entry, played: list[TrackRef] | None = None) -> bool:
+    """Did two independent systems name this track: two audio systems, or one plus the DJ's
+    own history?"""
+    heard = AUDIO_SOURCES.intersection(entry.sources)
+    if len(heard) >= 2:
+        return True
+    return bool(heard) and any(same_track(entry.track, t) for t in played or [])
 
 
 def _base_title(title: str) -> str:

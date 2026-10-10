@@ -198,6 +198,7 @@ def run(inputs: RunInputs, cfg: Config) -> tuple[Setlist, Path]:
         min_confidence=cfg.output.min_confidence_to_name,
         rejected=rejected,
         clip=bool(duration and duration < CLIP_SECONDS),
+        played=history,
     )
     suggest_from_history(entries, evidence, history, unplaced, cfg.identify.max_contenders)
 
@@ -448,27 +449,43 @@ def recognise_gaps(
     elif rec_duration < CLIP_SECONDS:  # ...unless it's a short clip: then check all of it
         win = min(CLIP_WINDOW, rec_duration)
         # Very short reels change track every few seconds: overlap the windows more.
-        step_s = CLIP_STEP if rec_duration >= 60 else CLIP_STEP / 2
+        step_s = CLIP_STEP if rec_duration >= 60 else CLIP_STEP / 4
         starts = [0.0]
-    times = []
+    # (where to cut, how long, online start, online end)
+    windows: list[tuple[float, float, float, float]] = []
     for t, end in zip(starts, ends, strict=True):
         # A clip's pieces may be shorter than a window: still look once at each. (Reading past
         # a piece's end is fine: it is the recording's own continuous audio.)
         while (t < end) if clip_ranges else (t + win <= end):
             on = to_online(t)
             if on is not None and not any(s - 10 <= on <= e - 10 for s, e in covered):
-                times.append(t)
+                windows.append((t, win, on, on + win))
             t += step_s
-    if rec_duration < CLIP_SECONDS and not clip_ranges and rec_duration - win not in times:
-        times.append(max(0.0, rec_duration - win))  # the clip's last seconds too
-    if not times:
+    if rec_duration < CLIP_SECONDS and not clip_ranges:
+        last = max(0.0, rec_duration - win)
+        if all(w[0] != last for w in windows):
+            windows.append((last, win, last, last + win))  # the clip's last seconds too
+    for a, b in clip_ranges or []:
+        # A reel's piece is seconds of a longer play. The original recording has the whole
+        # play, so also listen to a full-length window around the piece: a second, independent
+        # observation of the same track (credited to the piece's span only).
+        on_a, on_b = to_online(a), to_online(b)
+        if on_a is None or on_b is None or any(s - 10 <= on_a <= e - 10 for s, e in covered):
+            continue
+        long_win = cfg.identify.window_seconds
+        cut = max(0.0, min((a + b) / 2 - long_win / 2, rec_duration - long_win))
+        windows.append((cut, long_win, on_a, max(on_b, on_a + 3)))
+    if not windows:
         return []
     step(
-        f"Fingerprinting {len(times)} uncovered moments with {', '.join(r.name.value for r in usable)}"
+        f"Fingerprinting {len(windows)} uncovered moments with "
+        + ", ".join(r.name.value for r in usable)
     )
-    hits: list[tuple[float, TrackRef, float, Source]] = []
+    hits: list[tuple[float, float, TrackRef, float, Source]] = []
     with tempfile.TemporaryDirectory() as tmp:
-        for t in track(times, "Fingerprinting", console, lambda t: "at " + format_timestamp(t)):
+        for t, length, on_start, on_end in track(
+            windows, "Fingerprinting", console, lambda w: "at " + format_timestamp(w[0])
+        ):
             wav = Path(tmp) / "w.wav"
             subprocess.run(
                 [
@@ -480,7 +497,7 @@ def recognise_gaps(
                     "-ss",
                     f"{t:.2f}",
                     "-t",
-                    f"{win:.2f}",
+                    f"{length:.2f}",
                     "-i",
                     str(recording),
                     "-ac",
@@ -501,37 +518,37 @@ def recognise_gaps(
                         f"{r.reason}. Answers so far are cached.[/]"
                     )
                 for ref, score in found[:2]:
-                    on = to_online(t)
-                    if on is not None:
-                        hits.append((on, ref, score, r.name))
+                    hits.append((on_start, on_end, ref, score, r.name))
     for r in usable:
         console.print(f"  {r.summary()}", highlight=False)
-    return group_hits(hits, win)
+    return group_hits(hits)
 
 
-def group_hits(hits, window: float) -> list[Evidence]:
+def group_hits(hits) -> list[Evidence]:
     """Consecutive windows where one recogniser names the same track become one piece of
-    evidence. Each recogniser keeps its own, so the resolver can see when they agree."""
+    evidence. Each recogniser keeps its own, so the resolver can see when they agree.
+    hits are (online start, online end, track, score, recogniser)."""
     from setlister.resolve import combine, same_track
 
     hits.sort(key=lambda h: h[0])
     groups: list[Evidence] = []
-    for t, ref, score, src in hits:
+    for start, end, ref, score, src in hits:
         g = next(
             (
                 g
                 for g in reversed(groups[-8:])
-                if g.source == src and same_track(g.track, ref) and t - (g.end or g.start) < 120
+                if g.source == src and same_track(g.track, ref) and start - g.end < 120
             ),
             None,
         )
         if g:
-            g.end = t + window
+            g.start = min(g.start, start)
+            g.end = max(g.end, end)
             g.confidence = combine(g.confidence, score * 0.6)
         else:
             groups.append(
                 Evidence(
-                    track=ref, source=src, confidence=round(score * 0.6, 3), start=t, end=t + window
+                    track=ref, source=src, confidence=round(score * 0.6, 3), start=start, end=end
                 )
             )
     return groups

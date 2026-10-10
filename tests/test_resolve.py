@@ -150,3 +150,19 @@ def test_a_sample_source_heard_inside_a_track_becomes_a_footnote():
     assert [e.track.artist for e in entries] == ["Floorplan"]
     assert entries[0].samples[0].track.artist == "Aretha Franklin"
     assert entries[0].samples[0].source == "heard in the mix"
+
+
+def test_a_recogniser_naming_a_track_from_the_djs_history_counts_as_agreement():
+    rows = [ev("A", "One", 100, 150, 0.6, Source.SHAZAM)]
+    played = [TrackRef(artist="A", title="One")]
+    named = [e for e in resolve(rows, duration=600, played=played) if not e.is_unknown]
+    assert named and named[0].confidence >= 0.9
+
+
+def test_a_long_window_hit_on_the_original_corroborates_a_reel_piece():
+    from setlister.pipeline import group_hits
+
+    t = TrackRef(artist="Occibel", title="Let It Roll")
+    hits = [(30.0, 42.0, t, 0.8, Source.SHAZAM), (30.0, 42.0, t, 0.8, Source.SHAZAM)]
+    (g,) = group_hits(hits)
+    assert (g.start, g.end) == (30.0, 42.0) and g.confidence > 0.5
