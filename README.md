@@ -78,7 +78,8 @@ Results land in `out/<set-name>/` with a README explaining where to paste what.
   `ID? (A / B / C)`, never a confident guess. Two audio systems (Shazam, AcoustID, a
   local file match) naming the same track lifts it to at least 90%; a play of a minute or
   less heard by only one is probably a mismatch. Sample sources are footnoted, marked
-  "possibly" unless MusicBrainz records them.
+  "possibly" unless MusicBrainz records them. A highlight reel cut from a set you've
+  already run with `--original` takes each piece's track from that set's tracklist.
 - **Reuse over reinvention.** yt-dlp, librosa, Chromaprint/AcoustID, MusicBrainz, the Discogs
   client, LiteLLM and Ollama do the heavy lifting. New code is limited to what didn't exist:
   tempo-tolerant matching of known tracks inside a mix, evidence resolution, and the glue.

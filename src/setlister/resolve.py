@@ -8,6 +8,7 @@ Rules, in plain words:
   * Two independent systems agreeing on a track is strong evidence: two of Shazam, AcoustID
     and a local file match, or a recogniser naming a track the DJ's history says was played.
     Such rows get at least `CONSENSUS` confidence and no short-play penalty.
+  * Recogniser hits on fan mashups ('A x B x C', 'bootleg', 'blend') count for half.
   * A detection inside a track's stretch whose title is that track's title by another
     artist is the sample source, not a separate track: it becomes a footnote.
   * Detections spanning a minute or less are heavily penalised (DJs rarely play a track that
@@ -30,7 +31,10 @@ MIN_ROW_SECONDS = 20.0
 SHORT_PLAY = 60.0  # seconds; a detection this short is heavily penalised
 SHORT_PLAY_FULL = 120.0  # no penalty from here on
 SHORT_PLAY_FACTOR = 0.3
-AUDIO_SOURCES = {Source.SHAZAM, Source.ACOUSTID, Source.LOCAL_MATCH}
+AUDIO_SOURCES = {Source.SHAZAM, Source.ACOUSTID, Source.LOCAL_MATCH, Source.ORIGINAL_SET}
+RECOGNISERS = {Source.SHAZAM, Source.ACOUSTID}
+MASHUP_FACTOR = 0.5
+_MASHUP = re.compile(r"\b(mash ?up|bootleg|blend)\b| x ")
 CONSENSUS = 0.9
 
 
@@ -104,7 +108,13 @@ def resolve(
     min_row = 3.0 if clip else MIN_ROW_SECONDS
     if clip:
         min_gap = min(min_gap, 10.0)
-    timed = [e for e in evidence if e.start is not None]
+    timed = [
+        e.model_copy(update={"confidence": round(e.confidence * MASHUP_FACTOR, 3)})
+        if e.source in RECOGNISERS and is_mashup(e.track)
+        else e
+        for e in evidence
+        if e.start is not None
+    ]
     timed.sort(key=lambda e: e.confidence, reverse=True)
     entries: list[Entry] = []
     weak: list[Evidence] = []
@@ -168,6 +178,12 @@ def resolve(
     for entry in entries:
         entry.contenders = entry.contenders[:max_contenders]
     return entries
+
+
+def is_mashup(track: TrackRef) -> bool:
+    """'Mercy x Show Me Love x Feel Just Right': a fan mashup that Shazam sometimes prefers
+    over the record actually playing. Recogniser hits like that count for half."""
+    return bool(_MASHUP.search(f" {track.title.lower()} "))
 
 
 def consensus(entry: Entry, played: list[TrackRef] | None = None) -> bool:

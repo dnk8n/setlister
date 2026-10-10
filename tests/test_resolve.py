@@ -166,3 +166,58 @@ def test_a_long_window_hit_on_the_original_corroborates_a_reel_piece():
     hits = [(30.0, 42.0, t, 0.8, Source.SHAZAM), (30.0, 42.0, t, 0.8, Source.SHAZAM)]
     (g,) = group_hits(hits)
     assert (g.start, g.end) == (30.0, 42.0) and g.confidence > 0.5
+
+
+def test_mashup_hits_count_for_half_and_lose_to_the_set_track():
+    entries = resolve(
+        [
+            ev("VOIDSAINT", "Mercy x Show Me Love x Feel Just Right", 40, 52, 0.73, Source.SHAZAM),
+            ev("Jamie Unknown", "I Wanna", 40, 52, 0.6, Source.ORIGINAL_SET),
+        ],
+        duration=120,
+        clip=True,
+    )
+    named = [e for e in entries if not e.is_unknown]
+    assert named[0].track.title == "I Wanna"
+
+
+def test_reel_pieces_inherit_the_full_sets_track(tmp_path):
+    from setlister.audio.matcher import AlignmentSegment
+    from setlister.config import Config
+    from setlister.models import Entry
+    from setlister.pipeline import inherit_from_set, save_set_timeline
+
+    original = tmp_path / "set.wav"
+    original.write_bytes(b"x")
+    cfg = Config()
+    cfg.cache_dir = tmp_path / "cache"
+    save_set_timeline(
+        original,
+        [
+            Entry(
+                start=2895,
+                end=3094,
+                track=TrackRef(artist="Jamie Unknown", title="I Wanna"),
+                confidence=0.8,
+            ),
+            Entry(start=3094, end=3300, track=TrackRef(), confidence=0.0),
+        ],
+        cfg,
+    )
+    seg = AlignmentSegment(online_start=40, online_end=52, rate=1.0, offset=2907)  # 48:27
+    (ev_,) = inherit_from_set(original, [seg], cfg)
+    assert ev_.track.title == "I Wanna" and ev_.source == Source.ORIGINAL_SET
+    assert (round(ev_.start), round(ev_.end)) == (40, 52)
+
+
+def test_recogniser_runs_are_cut_back_at_pieces_of_other_tracks():
+    from setlister.pipeline import respect_pieces
+
+    run = ev("Oscar Sulley", "Bukom Mashie", 0, 32, 0.7, Source.SHAZAM)
+    pieces = [
+        ev("Tommy Atkins", "Intro", 0, 8, 0.8, Source.ORIGINAL_SET),
+        ev("Oscar Sulley", "Bukom Mashie", 8, 24, 0.8, Source.ORIGINAL_SET),
+        ev("UR", "Transition", 24, 32, 0.8, Source.ORIGINAL_SET),
+    ]
+    (cut,) = respect_pieces([run], pieces)
+    assert (cut.start, cut.end) == (8, 24)

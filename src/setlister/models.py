@@ -55,6 +55,7 @@ class Source(StrEnum):
     LOCAL_MATCH = "local_match"  # local audio file matched against the recording
     ACOUSTID = "acoustid"
     SHAZAM = "shazam"
+    ORIGINAL_SET = "original_set"  # the full set's tracklist, for a reel cut from it
     MANUAL = "manual"
 
 

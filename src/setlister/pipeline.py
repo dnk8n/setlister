@@ -12,6 +12,7 @@ Stages
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 import tempfile
@@ -183,6 +184,9 @@ def run(inputs: RunInputs, cfg: Config) -> tuple[Setlist, Path]:
                 # Also listen to the clip itself: a direct match beats one carried over from
                 # the original through a few seconds of alignment.
                 evidence += recognise_gaps(online_path, on_feat.duration, [], cfg, lambda t: t)
+        if segments and slack == 0.0 and inputs.original:
+            inherited = inherit_from_set(inputs.original, segments, cfg)
+            evidence = respect_pieces(evidence, inherited) + inherited
 
     # History tracks we couldn't place still count as "played, time unknown".
     placed = {e.order for e in evidence if e.source == Source.LOCAL_MATCH}
@@ -236,6 +240,9 @@ def run(inputs: RunInputs, cfg: Config) -> tuple[Setlist, Path]:
             "recording: " + "; ".join(t.display for t in unplaced) + "."
         ).strip()
 
+    if inputs.original and recording == inputs.original and not segments:
+        save_set_timeline(inputs.original, entries, cfg)  # times here are the original's
+
     # 7. write ------------------------------------------------------------------------------
     from setlister.output import folder_name, write_all
 
@@ -275,6 +282,80 @@ def suggest_from_history(
         for t in unplaced:
             if before < order_of[id(t)] < after and len(entry.contenders) < max_contenders:
                 entry.contenders.append(t)
+
+
+def _timeline_path(original: Path, cfg: Config) -> Path:
+    import hashlib
+
+    st = original.stat()
+    basis = f"{original.resolve()}|{st.st_size}|{int(st.st_mtime)}"
+    return (
+        cfg.cache_dir / "set-timelines" / (hashlib.sha1(basis.encode()).hexdigest()[:16] + ".json")
+    )
+
+
+def save_set_timeline(original: Path, entries: list[Entry], cfg: Config) -> None:
+    """Remember a full set's tracklist in the original recording's own times, so reels cut
+    from the same recording can reuse it."""
+    path = _timeline_path(original, cfg)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    named = [e for e in entries if not e.is_unknown]
+    path.write_text(json.dumps([e.model_dump(mode="json") for e in named]))
+
+
+def inherit_from_set(original: Path, segments, cfg: Config) -> list[Evidence]:
+    """A reel cut from a set: each piece carries the track the full set's tracklist has at
+    that moment of the original recording (run the full set with --original first)."""
+    path = _timeline_path(original, cfg)
+    if not path.is_file():
+        console.print(
+            "  [yellow]Tip: run the full set with this --original first; reel pieces then "
+            "get the full set's tracks.[/]"
+        )
+        return []
+    timeline = [Entry.model_validate(x) for x in json.loads(path.read_text())]
+    out = []
+    for seg in segments:
+        a = seg.online_start * seg.rate + seg.offset
+        b = seg.online_end * seg.rate + seg.offset
+        for e in timeline:
+            end = e.end if e.end is not None else e.start + 60
+            s, t = max(a, e.start), min(b, end)
+            if t - s < 2.0:
+                continue
+            out.append(
+                Evidence(
+                    track=e.track,
+                    source=Source.ORIGINAL_SET,
+                    confidence=e.confidence,
+                    start=(s - seg.offset) / seg.rate,
+                    end=(t - seg.offset) / seg.rate,
+                    detail=f"full set at original {format_timestamp(s)}",
+                )
+            )
+    step(f"Reel pieces matched to the full set's tracklist: {len(out)}")
+    return out
+
+
+def respect_pieces(evidence: list[Evidence], pieces: list[Evidence]) -> list[Evidence]:
+    """A recogniser's run of windows can straddle a reel's cuts. Where the full set says a
+    piece is a different track, cut the run back to its larger side of that piece."""
+    out = []
+    for e in evidence:
+        if e.source not in (Source.SHAZAM, Source.ACOUSTID) or e.start is None or e.end is None:
+            out.append(e)
+            continue
+        start, end = e.start, e.end
+        for p in pieces:
+            if same_track(p.track, e.track) or p.end <= start or p.start >= end:
+                continue
+            if p.start - start >= end - p.end:
+                end = p.start
+            else:
+                start = p.end
+        if end - start >= 3.0:
+            out.append(e.model_copy(update={"start": start, "end": end}))
+    return out
 
 
 def _set_key(inputs: RunInputs) -> str:
