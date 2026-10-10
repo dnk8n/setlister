@@ -89,10 +89,10 @@ def description_text(
     """
     sites = sites or list(SITE_NAMES)
     hours = bool(sl.duration and sl.duration >= 3600)
-    rows = []
-    for i, e in enumerate(sl.entries):
-        start = 0.0 if i == 0 else e.start  # chapters must start at 00:00
-        rows.append(f"{format_timestamp(start, force_hours=hours)} {_clean(short_label(e))}")
+    rows = [
+        f"{format_timestamp(start, force_hours=hours)} {_clean(name)}"
+        for start, name in chapters(sl)
+    ]
     numbered = [
         (i, e, _best_link(e, sites)) for i, e in enumerate(sl.entries, 1) if not e.is_unknown
     ]
@@ -131,6 +131,26 @@ def sample_line(entry: Entry) -> str:
         how = "per MusicBrainz" if s.source == "MusicBrainz" else "possibly, heard in the mix"
         parts.append(f"{s.track.display} ({how})")
     return _clean(f"{entry.track.display} samples " + "; ".join(parts))
+
+
+def chapters(sl: Setlist) -> list[tuple[float, str]]:
+    """(start, label) per chapter. YouTube drops every chapter if one is under 10 s (reels
+    cut every few seconds), so a short row shares a chapter with the next: 'A / B'."""
+    out: list[tuple[float, str]] = []
+    for i, e in enumerate(sl.entries):
+        start = 0.0 if i == 0 else e.start  # chapters must start at 00:00
+        if out and start - out[-1][0] < YOUTUBE_MIN_CHAPTER:
+            out[-1] = (out[-1][0], _join(out[-1][1], short_label(e)))
+        else:
+            out.append((start, short_label(e)))
+    if len(out) > 1 and sl.duration and sl.duration - out[-1][0] < YOUTUBE_MIN_CHAPTER:
+        last = out.pop()
+        out[-1] = (out[-1][0], _join(out[-1][1], last[1]))
+    return out
+
+
+def _join(a: str, b: str) -> str:
+    return a if b == a or (b == "ID" and a.endswith("ID")) else f"{a} / {b}"
 
 
 def mixcloud_tracklist(sl: Setlist) -> str:

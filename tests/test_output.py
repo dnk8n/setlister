@@ -90,3 +90,25 @@ def test_sample_footnotes_are_listed_and_dropped_before_links():
     )
     tight = description_text(sl, limit=len(text) - 1, sites=["bandcamp"])
     assert "Samples:" not in tight and tight.count("https://b.example/1") == 3
+
+
+def test_short_rows_share_a_chapter_so_youtube_keeps_chapters():
+    from setlister.output import chapters
+
+    sl = Setlist(
+        url="u",
+        duration=120,
+        entries=[
+            entry(0, "A", "One"),
+            entry(52, "Floorplan", "Never Grow Old"),
+            entry(56, "Gerd Janson", "London Town"),
+            entry(115, "B", "Two"),
+        ],
+    )
+    assert chapters(sl) == [
+        (0.0, "A - One"),
+        (52, "Floorplan - Never Grow Old / Gerd Janson - London Town / B - Two"),
+    ]
+    assert check_paste(description_text(sl), "youtube") == [
+        "fewer than 3 timestamps, so no chapters"
+    ]
