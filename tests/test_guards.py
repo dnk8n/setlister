@@ -17,3 +17,17 @@ def test_media_outside_docs_is_refused():
 
 def test_media_in_docs_is_allowed():
     assert guard.offenders(["docs/diagram.svg"]) == []
+
+
+def test_progress_prints_plain_lines_when_not_a_terminal():
+    import io
+
+    from rich.console import Console
+
+    from setlister.progress import track
+
+    buf = io.StringIO()
+    console = Console(file=buf, force_terminal=False, width=200)
+    assert list(track(range(20), "Fingerprinting", console, str)) == list(range(20))
+    lines = buf.getvalue().splitlines()
+    assert len(lines) == 10 and lines[-1].startswith("  Fingerprinting 20/20 · ")

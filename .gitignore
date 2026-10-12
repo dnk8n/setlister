@@ -46,3 +46,8 @@ media/
 
 # Run caches
 .setlister-cache/
+
+# Run outputs are personal: never committed (see docs/case-studies/ for a worked example)
+out/*
+!out/README.md
+.DS_Store

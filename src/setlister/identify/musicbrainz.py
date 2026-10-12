@@ -35,7 +35,7 @@ def _throttle() -> None:
 
 
 def find_recording(track: TrackRef) -> dict | None:
-    includes = ["artists", "releases", "url-rels", "isrcs", "tags"]
+    includes = ["artists", "releases", "url-rels", "recording-rels", "isrcs", "tags"]
     try:
         if track.musicbrainz_recording_id:
             _throttle()
@@ -50,15 +50,29 @@ def find_recording(track: TrackRef) -> dict | None:
                 return mb.get_recording_by_id(r["id"], includes=includes)["recording"]
         if track.title:
             _throttle()
-            res = mb.search_recordings(recording=track.title, artist=track.artist, limit=5)
-            for r in res.get("recording-list", []):
-                name = f"{r.get('artist-credit-phrase', '')} - {r.get('title', '')}"
-                if similarity(name, track.display) > 0.75:
-                    _throttle()
-                    return mb.get_recording_by_id(r["id"], includes=includes)["recording"]
+            res = mb.search_recordings(recording=track.title, artist=track.artist, limit=10)
+            matches = [r for r in res.get("recording-list", []) if is_same(r, track)]
+            if matches:
+                # Several recordings often match (album, single, compilation): take the
+                # earliest release so facts are the same on every run.
+                best = min(matches, key=_first_date)
+                _throttle()
+                return mb.get_recording_by_id(best["id"], includes=includes)["recording"]
     except mb.WebServiceError as e:
         log.debug("musicbrainz: %s", e)
     return None
+
+
+def is_same(rec: dict, track: TrackRef) -> bool:
+    """Both artist and title must match closely: 'Raz Fresco - Vanilla Skies' is not
+    'Dan Fresco - Vanilla'."""
+    artist_ok = similarity(rec.get("artist-credit-phrase", ""), track.artist) >= 0.9
+    return artist_ok and similarity(rec.get("title", ""), track.title) >= 0.85
+
+
+def _first_date(rec: dict) -> str:
+    dates = [r["date"] for r in rec.get("release-list", []) if r.get("date")]
+    return min(dates, default="9999") + rec.get("id", "")
 
 
 def facts_and_links(rec: dict) -> tuple[dict, list[Link]]:
@@ -73,6 +87,9 @@ def facts_and_links(rec: dict) -> tuple[dict, list[Link]]:
         facts["first_release_date"] = dates[0]
     facts["releases"] = [r.get("title") for r in releases[:5]]
     facts["tags"] = [t["name"] for t in rec.get("tag-list", [])[:8]]
+    samples = sampled(rec)
+    if samples:
+        facts["samples"] = [t.display for t in samples]
     links = [
         Link(site="musicbrainz", url=f"https://musicbrainz.org/recording/{rec['id']}", exact=True)
     ]
@@ -82,3 +99,18 @@ def facts_and_links(rec: dict) -> tuple[dict, list[Link]]:
             if host in url:
                 links.append(Link(site=site, url=url, exact=True))
     return facts, links
+
+
+def sampled(rec: dict) -> list[TrackRef]:
+    """Recordings this one samples ("samples material", read forwards; backwards means
+    it was sampled by the other recording)."""
+    out = []
+    for rel in rec.get("recording-relation-list", []):
+        if rel.get("type") != "samples material" or rel.get("direction") == "backward":
+            continue
+        target = rel.get("recording") or {}
+        if target.get("title"):
+            out.append(
+                TrackRef(artist=target.get("artist-credit-phrase", ""), title=target["title"])
+            )
+    return out

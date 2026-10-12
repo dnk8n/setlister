@@ -35,6 +35,9 @@ class AudioConfig(_Section):
 class IdentifyConfig(_Section):
     acoustid: bool = True
     shazam: bool = True  # free but unofficial API, see docs/providers.md
+    # Seconds between Shazam requests. Faster gets an IP blocked for hours (seen at 1 s).
+    # Answers are cached, so this cost is paid once per set.
+    shazam_pace_seconds: float = 4.0
     window_seconds: float = 20.0
     step_seconds: float = 30.0
     max_contenders: int = 3
@@ -43,13 +46,18 @@ class IdentifyConfig(_Section):
 
 class LinksConfig(_Section):
     sites: list[str] = ["bandcamp", "discogs", "soundcloud", "youtube"]
-    resolve_exact: bool = True  # try to find exact pages, not just search URLs
+    resolve_exact: bool = (
+        True  # look up confirmed pages; false = only links found in the set's own text
+    )
 
 
 class NotesConfig(_Section):
-    enabled: bool = True
-    # Any LiteLLM model string. Free default: a local Qwen via Ollama (https://ollama.com).
-    # Paid examples: "anthropic/claude-sonnet-5-5", "openai/gpt-5-mini".
+    # Off by default: a local LLM is slow on a laptop. Without it each track still gets a
+    # short factual note (year, label, styles). Turn on with `--llm-notes` or llm = true.
+    llm: bool = False
+    # "claude-code/haiku" uses the Claude Code CLI you are logged in to (no API key).
+    # Anything else is a LiteLLM model string: free local Qwen via Ollama (the default,
+    # https://ollama.com), or paid APIs such as "anthropic/claude-haiku-5-5".
     model: str = "ollama/qwen3:8b"
     api_base: str | None = None
     max_words: int = 70

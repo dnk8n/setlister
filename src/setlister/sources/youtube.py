@@ -72,14 +72,13 @@ def download_audio(url: str, cache_dir: Path) -> Path:
     return sorted(cache_dir.glob("audio.*"))[0]
 
 
-def search_first(query: str, site: str = "youtube") -> dict | None:
-    """First search hit on YouTube ('ytsearch') or SoundCloud ('scsearch'), metadata only."""
-    prefix = {"youtube": "ytsearch1:", "soundcloud": "scsearch1:"}[site]
+def search(query: str, site: str = "youtube", n: int = 5) -> list[dict]:
+    """Top `n` search hits on YouTube ('ytsearchN') or SoundCloud ('scsearchN'), metadata only."""
+    prefix = {"youtube": "ytsearch", "soundcloud": "scsearch"}[site]
     try:
         with _ydl({"skip_download": True, "extract_flat": True}) as ydl:
-            res = ydl.extract_info(prefix + query, download=False)
+            res = ydl.extract_info(f"{prefix}{n}:{query}", download=False)
     except Exception as e:  # network / extractor errors shouldn't kill a run
         log.debug("search failed on %s: %s", site, e)
-        return None
-    entries = res.get("entries") or []
-    return entries[0] if entries else None
+        return []
+    return [h for h in res.get("entries") or [] if h]

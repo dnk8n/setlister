@@ -60,3 +60,48 @@ def test_align_trimmed_copy():
 def test_stretch_changes_length():
     x = np.random.default_rng(0).random((4, 1000)).astype(np.float32)
     assert stretch(x, 1.25).shape == (4, 800)
+
+
+def test_align_sped_up_reupload():
+    original = synth_track(11, 400, 126)
+    # online copy: starts 20 s in, and plays 4 % fast (24 -> 25 fps style conversion)
+    online = resample(original[int(20 * SR) : int(380 * SR)], 1.04)
+    segs = align(MixIndex(logmel(original, SR)), logmel(online, SR), step_seconds=40)
+    assert segs and abs(segs[0].rate - 1.04) <= 0.0051
+    # 200 s into the original is (200 - 20) / 1.04 s into the online copy
+    assert abs(original_to_online(200.0, segs) - 180 / 1.04) < 1.5
+
+
+def test_highlight_reel_pieces_are_found_in_the_original():
+    from setlister.audio.matcher import align_clip, original_span_to_online
+
+    original = np.concatenate(
+        [synth_track(21, 200, 124), synth_track(22, 200, 128), synth_track(23, 200, 126)]
+    )
+    cuts = [(50, 62), (260, 270), (480, 492)]  # 12 s, 10 s and 12 s from three tracks
+    reel = np.concatenate([original[int(a * SR) : int(b * SR)] for a, b in cuts])
+    segs = align_clip(MixIndex(logmel(original, SR)), logmel(reel, SR))
+    starts = [s.online_start * s.rate + s.offset for s in segs]
+    for a, _ in cuts:
+        assert any(abs(st - a) < 5 for st in starts), (a, starts)
+    # the second track (200-400 s in the original) shows up 12-22 s into the reel
+    (piece,) = original_span_to_online(200, 400, segs)
+    assert abs(piece[0] - 12) < 3 and abs(piece[1] - 22) < 3
+
+
+def test_clip_from_elsewhere_is_not_placed_in_the_original():
+    from setlister.audio.matcher import align_clip
+
+    original = np.concatenate([synth_track(21, 200, 124), synth_track(22, 200, 128)])
+    other = synth_track(31, 40, 125)
+    assert align_clip(MixIndex(logmel(original, SR)), logmel(other, SR)) == []
+
+
+def test_segment_boundaries_map_despite_float_rounding():
+    from setlister.audio.matcher import AlignmentSegment, original_to_online
+
+    seg = AlignmentSegment(online_start=30.1, online_end=42.3, rate=1.0213, offset=2947.77)
+    a = seg.online_start * seg.rate + seg.offset
+    b = seg.online_end * seg.rate + seg.offset
+    assert original_to_online(a, [seg], 0.0) is not None
+    assert original_to_online(b, [seg], 0.0) is not None

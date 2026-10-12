@@ -202,6 +202,8 @@ def locate_candidates(
     fps = index.fps
     rates = np.arange(1 - max_rate_change, 1 + max_rate_change + 1e-9, rate_step)
     half = int(excerpt_seconds * fps / 2)
+    if index.flux.shape[1] < 2 * half:
+        return []  # the recording is shorter than the excerpt (a clip): nothing to place
 
     # 1. coarse search: middle excerpt of the track at every candidate playback rate
     cands: list[tuple[float, float, int]] = []  # (score, rate, lag of track frame 0)
@@ -329,9 +331,49 @@ def locate_candidates(
 
 @dataclass
 class AlignmentSegment:
-    online_start: float
+    online_start: float  # seconds in the online copy
     online_end: float
-    offset: float  # original_time = online_time + offset
+    offset: float  # original_time = online_time * rate + offset
+    rate: float = 1.0  # >1 means the online copy plays faster than the original
+
+
+def _align_points(
+    original: MixIndex,
+    flux: np.ndarray,
+    fps: float,
+    win: int,
+    step: int,
+    min_ncc: float,
+    min_margin: float,
+) -> tuple[list[tuple[float, float]], int]:
+    points, tried = [], 0
+    for s in range(0, max(1, flux.shape[1] - win), step):
+        tried += 1
+        corr = original.correlate(flux[:, s : s + win])
+        p = int(np.argmax(corr))
+        away = np.ones(len(corr), bool)
+        away[max(0, p - int(2 * fps)) : p + int(2 * fps)] = False
+        second = corr[away].max() if away.any() else 0.0
+        if corr[p] >= min_ncc and corr[p] - second >= min_margin:
+            points.append((s / fps, (p - s) / fps))
+    return points, tried
+
+
+def _probe_rate(original: MixIndex, online: Features, win: int) -> float:
+    """Best playback rate of the online copy relative to the original, from a few windows.
+    Re-uploads are sometimes sped up or slowed down (e.g. 24/25 fps video conversion = 4 %)."""
+    best_rate, best_score = 1.0, -1.0
+    for r in np.arange(0.95, 1.0501, 0.0025):
+        flux = _flux(stretch(online.logmel, 1 / r))
+        m = flux.shape[1]
+        scores = [
+            float(original.correlate(flux[:, int(m * q) : int(m * q) + win]).max())
+            for q in (0.25, 0.5, 0.75)
+            if int(m * q) + win < m
+        ]
+        if scores and np.mean(scores) > best_score:
+            best_rate, best_score = float(r), float(np.mean(scores))
+    return best_rate
 
 
 def align(
@@ -342,37 +384,77 @@ def align(
     step_seconds: float = 60.0,
     min_ncc: float = 0.5,
     min_margin: float = 0.08,
+    probe_rate: bool = True,
 ) -> list[AlignmentSegment]:
-    """Map the online copy onto the original recording (handles trims and cuts)."""
+    """Map the online copy onto the original recording. Handles trims, cuts and a copy that
+    was uploaded at a slightly different speed."""
     fps = online.fps
-    flux = _flux(online.logmel)
     win, step = int(window_seconds * fps), int(step_seconds * fps)
-    points: list[tuple[float, float]] = []  # (online_time, offset)
-    for s in range(0, max(1, flux.shape[1] - win), step):
-        corr = original.correlate(flux[:, s : s + win])
-        p = int(np.argmax(corr))
-        away = np.ones(len(corr), bool)
-        away[max(0, p - int(2 * fps)) : p + int(2 * fps)] = False
-        second = corr[away].max() if away.any() else 0.0
-        if corr[p] >= min_ncc and corr[p] - second >= min_margin:
-            points.append((s / fps, (p - s) / fps))
+    rate = 1.0
+    points, tried = _align_points(
+        original, _flux(online.logmel), fps, win, step, min_ncc, min_margin
+    )
+    if probe_rate and len(points) < 0.3 * tried:
+        probed = _probe_rate(original, online, win)
+        if abs(probed - 1.0) > 1e-6:
+            flux = _flux(stretch(online.logmel, 1 / probed))
+            p2, t2 = _align_points(original, flux, fps, win, step, min_ncc, min_margin)
+            if len(p2) > len(points):
+                rate = probed
+                # p2 holds (time at original speed, offset); online time = that / rate
+                points = [(t / rate, off) for t, off in p2]
     segments: list[AlignmentSegment] = []
     for t, off in points:
+        # off = original_time - stretched_time, and stretched_time = online_time * rate
         if segments and abs(segments[-1].offset - off) < 1.0:
-            segments[-1].online_end = t + window_seconds
+            segments[-1].online_end = t + window_seconds / rate
         else:
-            segments.append(AlignmentSegment(t, t + window_seconds, off))
+            segments.append(AlignmentSegment(t, t + window_seconds / rate, off, rate))
     return segments
 
 
-def original_to_online(t: float, segments: list[AlignmentSegment]) -> float | None:
+CLIP_SECONDS = 300.0  # an upload shorter than this is treated as a clip / highlight reel
+
+
+def align_clip(original: MixIndex, clip: Features) -> list[AlignmentSegment]:
+    """Find where each piece of a short clip (e.g. a highlight reel cut every few seconds)
+    comes from in the original recording.
+
+    Short windows and a high similarity bar. No uniqueness margin: within one loop-based
+    track several bars match almost equally, and any of them names the right track."""
+    return align(
+        original,
+        clip,
+        window_seconds=8.0,
+        step_seconds=4.0,
+        min_ncc=0.7,
+        min_margin=0.0,
+        probe_rate=False,
+    )
+
+
+def original_span_to_online(
+    start: float, end: float, segments: list[AlignmentSegment], *, min_seconds: float = 2.0
+) -> list[tuple[float, float]]:
+    """The parts of [start, end] in the original that made it into the online copy, in the
+    online copy's timeline (one piece per segment it overlaps)."""
+    pieces = []
+    for seg in segments:
+        o_start = seg.online_start * seg.rate + seg.offset
+        o_end = seg.online_end * seg.rate + seg.offset
+        s, e = max(start, o_start), min(end, o_end)
+        if e - s >= min_seconds:
+            pieces.append(((s - seg.offset) / seg.rate, (e - seg.offset) / seg.rate))
+    return pieces
+
+
+def original_to_online(
+    t: float, segments: list[AlignmentSegment], slack: float = 60.0
+) -> float | None:
     """Convert a time in the original recording into the online copy's timeline."""
     for seg in segments:
-        o = t - seg.offset
-        if seg.online_start - step_slack(seg) <= o <= seg.online_end + step_slack(seg):
+        o = (t - seg.offset) / seg.rate
+        # (a hair of tolerance: segment ends computed back and forth don't round-trip exactly)
+        if seg.online_start - slack - 1e-6 <= o <= seg.online_end + slack + 1e-6:
             return o
     return None
-
-
-def step_slack(seg: AlignmentSegment) -> float:
-    return 60.0

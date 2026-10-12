@@ -12,6 +12,7 @@ Stages
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 import tempfile
@@ -20,9 +21,11 @@ from pathlib import Path
 
 from rich.console import Console
 
+from setlister.audio.matcher import CLIP_SECONDS
 from setlister.config import Config
 from setlister.models import Entry, Evidence, Setlist, Source, TrackRef
-from setlister.resolve import pick_in_order, resolve
+from setlister.progress import track
+from setlister.resolve import pick_in_order, resolve, same_track
 from setlister.timefmt import format_timestamp
 
 log = logging.getLogger(__name__)
@@ -82,7 +85,15 @@ def run(inputs: RunInputs, cfg: Config) -> tuple[Setlist, Path]:
     offset_note = None
     if recording:
         from setlister.audio.features import features_for
-        from setlister.audio.matcher import MixIndex, align, locate_candidates, original_to_online
+        from setlister.audio.matcher import (
+            CLIP_SECONDS,
+            MixIndex,
+            align,
+            align_clip,
+            locate_candidates,
+            original_span_to_online,
+            original_to_online,
+        )
 
         step(f"Analysing {recording.name}")
         rec_feat = features_for(recording, cfg.audio.analysis_sr, cfg.cache_dir)
@@ -91,27 +102,47 @@ def run(inputs: RunInputs, cfg: Config) -> tuple[Setlist, Path]:
         if inputs.original and online_path and online_path != recording:
             step("Aligning your original recording with the online copy")
             on_feat = features_for(online_path, cfg.audio.analysis_sr, cfg.cache_dir)
-            segments = align(index, on_feat)
+            is_clip = on_feat.duration < CLIP_SECONDS
+            segments = align_clip(index, on_feat) if is_clip else align(index, on_feat)
             offset_note = describe_alignment(segments, rec_feat.duration, on_feat.duration)
             duration = on_feat.duration
+            if not segments:
+                # Fall back to analysing the online copy itself, so times are still right.
+                offset_note += " Analysed the online copy directly instead."
+                recording, rec_feat = online_path, on_feat
+                index = MixIndex(rec_feat)
             console.print(f"  {offset_note}")
+        elif inputs.original and info.get("duration"):
+            offset_note = (
+                "The online copy is as long as the original recording, so they were "
+                "assumed identical (no download)."
+            )
+
+        # A clip's pieces are seconds long, so don't stretch them; a full set gets slack for
+        # tracks that began just before a cut.
+        slack = 0.0 if segments and on_feat.duration < CLIP_SECONDS else 60.0
 
         def to_online(t: float) -> float | None:
-            return original_to_online(t, segments) if segments else t
+            return original_to_online(t, segments, slack) if segments else t
+
+        def spans(s: float, e: float) -> list[tuple[float, float]]:
+            if not segments:
+                return [(s, e)]
+            return original_span_to_online(s, e, segments) or (
+                [(a, b)] if (a := to_online(s)) is not None and (b := to_online(e)) else []
+            )
 
         files = [(i, t) for i, t in enumerate(history) if t.path and Path(t.path).is_file()]
         if files:
             step(f"Locating {len(files)} history tracks in the recording")
             options: list[list[Evidence]] = [[] for _ in history]
-            for i, t in files:
+            more_pieces: dict[int, list[Evidence]] = {}  # a clip can show a track several times
+            for i, t in track(files, "Locating", console, lambda f: f[1].display):
                 feat = features_for(Path(t.path), cfg.audio.analysis_sr, cfg.cache_dir)
                 for m in locate_candidates(index, feat, max_rate_change=cfg.audio.max_tempo_change)[
                     :3
                 ]:
-                    s, e = to_online(m.start), to_online(m.end)
-                    if s is None or e is None:
-                        continue
-                    options[i].append(
+                    pieces = [
                         Evidence(
                             track=t,
                             source=Source.LOCAL_MATCH,
@@ -121,14 +152,41 @@ def run(inputs: RunInputs, cfg: Config) -> tuple[Setlist, Path]:
                             order=i,
                             detail=f"rate {m.rate:.3f}",
                         )
-                    )
+                        for s, e in spans(m.start, m.end)
+                    ]
+                    if pieces:
+                        options[i].append(pieces[0])
+                        more_pieces[id(pieces[0])] = pieces[1:]
             chosen = pick_in_order(options)
+            if slack == 0.0:  # a clip: placements rest on seconds of audio, so weigh them less
+                for c in chosen:
+                    c.confidence = round(c.confidence * 0.7, 3)
+                    for p in more_pieces.get(id(c), []):
+                        p.confidence = c.confidence
             evidence += chosen
+            evidence += [p for c in chosen for p in more_pieces.get(id(c), [])]
             console.print(f"  placed {len(chosen)} of {len(files)}")
 
         # 4. recognise ----------------------------------------------------------------------
         if not inputs.offline:
-            evidence += recognise_gaps(recording, rec_feat.duration, evidence, cfg, to_online)
+            clip_ranges = (
+                [
+                    (s.online_start * s.rate + s.offset, s.online_end * s.rate + s.offset)
+                    for s in segments
+                ]
+                if segments and slack == 0.0
+                else None
+            )
+            evidence += recognise_gaps(
+                recording, rec_feat.duration, evidence, cfg, to_online, clip_ranges
+            )
+            if clip_ranges and online_path:
+                # Also listen to the clip itself: a direct match beats one carried over from
+                # the original through a few seconds of alignment.
+                evidence += recognise_gaps(online_path, on_feat.duration, [], cfg, lambda t: t)
+        if segments and slack == 0.0 and inputs.original:
+            inherited = inherit_from_set(inputs.original, segments, cfg)
+            evidence = respect_pieces(evidence, inherited) + inherited
 
     # History tracks we couldn't place still count as "played, time unknown".
     placed = {e.order for e in evidence if e.source == Source.LOCAL_MATCH}
@@ -136,15 +194,35 @@ def run(inputs: RunInputs, cfg: Config) -> tuple[Setlist, Path]:
 
     # 5. resolve ----------------------------------------------------------------------------
     step("Resolving evidence into a setlist")
-    entries = resolve(evidence, duration=duration, max_contenders=cfg.identify.max_contenders)
+    rejected: list[Entry] = []
+    entries = resolve(
+        evidence,
+        duration=duration,
+        max_contenders=cfg.identify.max_contenders,
+        min_confidence=cfg.output.min_confidence_to_name,
+        rejected=rejected,
+        clip=bool(duration and duration < CLIP_SECONDS),
+        played=history,
+    )
     suggest_from_history(entries, evidence, history, unplaced, cfg.identify.max_contenders)
+
+    if duration and duration < 300:
+        console.print(
+            f"  [yellow]This upload is only {format_timestamp(duration)} long, so it is probably "
+            "a clip or highlight reel rather than the set; only what is audible in it can be "
+            "identified.[/]"
+        )
+    if not any(not e.is_unknown for e in entries):
+        console.print("  [yellow]No tracks could be identified in this upload.[/]")
 
     # 6. enrich -----------------------------------------------------------------------------
     if not inputs.offline:
         step("Finding links and writing track notes")
-        for e in entries:
-            if not e.is_unknown:
-                enrich(e, cfg)
+        named = [e for e in entries if not e.is_unknown]
+        how = f"notes: {cfg.notes.model}" if cfg.notes.llm else "notes: facts only"
+        step(f"{len(named)} tracks ({how})")
+        for e in track(named, "Links & notes", console, lambda e: e.track.display):
+            enrich(e, cfg)
 
     sl = Setlist(
         url=inputs.url or str(inputs.original or ""),
@@ -152,18 +230,27 @@ def run(inputs: RunInputs, cfg: Config) -> tuple[Setlist, Path]:
         duration=duration,
         entries=entries,
         offset_note=offset_note,
+        rejected=rejected,
     )
-    if unplaced:
+    named = [e.track for e in entries if not e.is_unknown]
+    unplaced = [t for t in unplaced if not any(same_track(t, n) for n in named)]
+    if unplaced and not (duration and duration < CLIP_SECONDS):  # a clip skips most tracks
         sl.offset_note = (
             (sl.offset_note or "") + " Also in the DJ history but not heard in this "
             "recording: " + "; ".join(t.display for t in unplaced) + "."
         ).strip()
 
+    if inputs.original and recording == inputs.original and not segments:
+        save_set_timeline(inputs.original, entries, cfg)  # times here are the original's
+
     # 7. write ------------------------------------------------------------------------------
-    from setlister.output import slug, write_all
+    from setlister.output import folder_name, write_all
 
     outdir = write_all(
-        sl, cfg.output.directory / slug(sl.title or key), cfg.output.min_confidence_to_name
+        sl,
+        cfg.output.directory / folder_name(sl.title or key, info.get("id")),
+        cfg.output.min_confidence_to_name,
+        sites=cfg.links.sites,
     )
     return sl, outdir
 
@@ -195,6 +282,80 @@ def suggest_from_history(
         for t in unplaced:
             if before < order_of[id(t)] < after and len(entry.contenders) < max_contenders:
                 entry.contenders.append(t)
+
+
+def _timeline_path(original: Path, cfg: Config) -> Path:
+    import hashlib
+
+    st = original.stat()
+    basis = f"{original.resolve()}|{st.st_size}|{int(st.st_mtime)}"
+    return (
+        cfg.cache_dir / "set-timelines" / (hashlib.sha1(basis.encode()).hexdigest()[:16] + ".json")
+    )
+
+
+def save_set_timeline(original: Path, entries: list[Entry], cfg: Config) -> None:
+    """Remember a full set's tracklist in the original recording's own times, so reels cut
+    from the same recording can reuse it."""
+    path = _timeline_path(original, cfg)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    named = [e for e in entries if not e.is_unknown]
+    path.write_text(json.dumps([e.model_dump(mode="json") for e in named]))
+
+
+def inherit_from_set(original: Path, segments, cfg: Config) -> list[Evidence]:
+    """A reel cut from a set: each piece carries the track the full set's tracklist has at
+    that moment of the original recording (run the full set with --original first)."""
+    path = _timeline_path(original, cfg)
+    if not path.is_file():
+        console.print(
+            "  [yellow]Tip: run the full set with this --original first; reel pieces then "
+            "get the full set's tracks.[/]"
+        )
+        return []
+    timeline = [Entry.model_validate(x) for x in json.loads(path.read_text())]
+    out = []
+    for seg in segments:
+        a = seg.online_start * seg.rate + seg.offset
+        b = seg.online_end * seg.rate + seg.offset
+        for e in timeline:
+            end = e.end if e.end is not None else e.start + 60
+            s, t = max(a, e.start), min(b, end)
+            if t - s < 2.0:
+                continue
+            out.append(
+                Evidence(
+                    track=e.track,
+                    source=Source.ORIGINAL_SET,
+                    confidence=e.confidence,
+                    start=(s - seg.offset) / seg.rate,
+                    end=(t - seg.offset) / seg.rate,
+                    detail=f"full set at original {format_timestamp(s)}",
+                )
+            )
+    step(f"Reel pieces matched to the full set's tracklist: {len(out)}")
+    return out
+
+
+def respect_pieces(evidence: list[Evidence], pieces: list[Evidence]) -> list[Evidence]:
+    """A recogniser's run of windows can straddle a reel's cuts. Where the full set says a
+    piece is a different track, cut the run back to its larger side of that piece."""
+    out = []
+    for e in evidence:
+        if e.source not in (Source.SHAZAM, Source.ACOUSTID) or e.start is None or e.end is None:
+            out.append(e)
+            continue
+        start, end = e.start, e.end
+        for p in pieces:
+            if same_track(p.track, e.track) or p.end <= start or p.start >= end:
+                continue
+            if p.start - start >= end - p.end:
+                end = p.start
+            else:
+                start = p.end
+        if end - start >= 3.0:
+            out.append(e.model_copy(update={"start": start, "end": end}))
+    return out
 
 
 def _set_key(inputs: RunInputs) -> str:
@@ -308,6 +469,9 @@ def describe_alignment(segments, original_duration: float, online_duration: floa
             parts.append(
                 f"The online copy has {format_timestamp(-first.offset)} extra at the start"
             )
+    if abs(first.rate - 1) > 0.001:
+        faster = "faster" if first.rate > 1 else "slower"
+        parts.append(f"plays {abs(first.rate - 1):.1%} {faster} than the original")
     if len(segments) > 1:
         parts.append(f"and has {len(segments) - 1} cut(s)")
     if not parts:
@@ -318,16 +482,36 @@ def describe_alignment(segments, original_duration: float, online_duration: floa
     )
 
 
+CLIP_WINDOW, CLIP_STEP = 12.0, 10.0  # highlight reels cut every few seconds
+
+
 def recognise_gaps(
-    recording: Path, rec_duration: float, evidence: list[Evidence], cfg: Config, to_online
+    recording: Path,
+    rec_duration: float,
+    evidence: list[Evidence],
+    cfg: Config,
+    to_online,
+    clip_ranges: list[tuple[float, float]] | None = None,
 ) -> list[Evidence]:
-    from setlister.identify import recognizers
+    """Fingerprint the stretches no other evidence explains. `clip_ranges` (times in the
+    recording) limits this to the pieces a short clip was cut from."""
+    from setlister.identify import CachedRecognizer, recognizers
 
     usable = []
     for r in recognizers(cfg):
         ok, why = r.available()
         if ok:
-            usable.append(r)
+            pace = cfg.identify.shazam_pace_seconds if r.name == Source.SHAZAM else 0.0
+            usable.append(
+                CachedRecognizer(
+                    r,
+                    cfg.cache_dir,
+                    pace_seconds=pace,
+                    on_wait=lambda s, why, n=r.name.value: console.print(
+                        f"  [yellow]{n} failed ({why}); waiting {s:.0f} s before retrying[/]"
+                    ),
+                )
+            )
         else:
             console.print(f"  [yellow]skipping {r.name.value}[/]: {why}")
     if not usable:
@@ -338,21 +522,61 @@ def recognise_gaps(
         if e.start is not None and e.end is not None and e.confidence >= 0.5
     ]
     win, step_s = cfg.identify.window_seconds, cfg.identify.step_seconds
-    times = []
-    t = 15.0
-    while t + win < rec_duration:
-        on = to_online(t)
-        if on is not None and not any(s - 10 <= on <= e - 10 for s, e in covered):
-            times.append(t)
-        t += step_s
-    if not times:
+    starts = [15.0]  # skip the intro/crowd noise at the very start of a set...
+    ends = [rec_duration]
+    if clip_ranges:
+        win, step_s = CLIP_WINDOW, CLIP_STEP
+        starts, ends = [a for a, _ in clip_ranges], [b for _, b in clip_ranges]
+    elif rec_duration < CLIP_SECONDS:  # ...unless it's a short clip: then check all of it
+        win = min(CLIP_WINDOW, rec_duration)
+        # Very short reels change track every few seconds: overlap the windows more.
+        step_s = CLIP_STEP if rec_duration >= 60 else CLIP_STEP / 4
+        starts = [0.0]
+    # (where to cut, how long, online start, online end)
+    windows: list[tuple[float, float, float, float]] = []
+    for t, end in zip(starts, ends, strict=True):
+        # A clip's pieces may be shorter than a window: still look once at each. (Reading past
+        # a piece's end is fine: it is the recording's own continuous audio.)
+        while (t < end) if clip_ranges else (t + win <= end):
+            on = to_online(t)
+            if on is not None and not any(s - 10 <= on <= e - 10 for s, e in covered):
+                windows.append((t, win, on, on + win))
+            t += step_s
+    if rec_duration < CLIP_SECONDS and not clip_ranges:
+        last = max(0.0, rec_duration - win)
+        if all(w[0] != last for w in windows):
+            windows.append((last, win, last, last + win))  # the clip's last seconds too
+    for a, b in clip_ranges or []:
+        # A reel's piece is seconds of a longer play. The original recording has the whole
+        # play, so also listen to a full-length window around the piece: a second, independent
+        # observation of the same track (credited to the piece's span only).
+        # Map the piece's middle: its exact ends sit on segment boundaries.
+        on_mid = to_online((a + b) / 2)
+        if on_mid is None:
+            console.print(f"  [yellow]reel piece at original {format_timestamp(a)} did not map[/]")
+            continue
+        half = max(b - a, 3.0) / 2
+        on_a, on_b = max(0.0, on_mid - half), on_mid + half
+        long_win = cfg.identify.window_seconds
+        cut = max(0.0, min((a + b) / 2 - long_win / 2, rec_duration - long_win))
+        console.print(
+            f"  reel {format_timestamp(on_a)}–{format_timestamp(on_b)} = original "
+            f"{format_timestamp(a)}–{format_timestamp(b)}: also checking "
+            f"{format_timestamp(cut)}–{format_timestamp(cut + long_win)}",
+            highlight=False,
+        )
+        windows.append((cut, long_win, on_a, on_b))
+    if not windows:
         return []
     step(
-        f"Fingerprinting {len(times)} uncovered moments with {', '.join(r.name.value for r in usable)}"
+        f"Fingerprinting {len(windows)} uncovered moments with "
+        + ", ".join(r.name.value for r in usable)
     )
-    hits: list[tuple[float, TrackRef, float, Source]] = []
+    hits: list[tuple[float, float, TrackRef, float, Source]] = []
     with tempfile.TemporaryDirectory() as tmp:
-        for t in times:
+        for t, length, on_start, on_end in track(
+            windows, "Fingerprinting", console, lambda w: "at " + format_timestamp(w[0])
+        ):
             wav = Path(tmp) / "w.wav"
             subprocess.run(
                 [
@@ -364,7 +588,7 @@ def recognise_gaps(
                     "-ss",
                     f"{t:.2f}",
                     "-t",
-                    f"{win:.2f}",
+                    f"{length:.2f}",
                     "-i",
                     str(recording),
                     "-ac",
@@ -376,35 +600,46 @@ def recognise_gaps(
                 check=True,
             )
             for r in usable:
-                for ref, score in r.recognize(wav)[:2]:
-                    on = to_online(t)
-                    if on is not None:
-                        hits.append((on, ref, score, r.name))
-    return group_hits(hits, win)
+                if r.gave_up:
+                    continue
+                found = r.recognize(wav)
+                if r.gave_up:
+                    console.print(
+                        f"  [yellow]{r.name.value} skipped for the rest of this run: "
+                        f"{r.reason}. Answers so far are cached.[/]"
+                    )
+                for ref, score in found[:2]:
+                    hits.append((on_start, on_end, ref, score, r.name))
+    for r in usable:
+        console.print(f"  {r.summary()}", highlight=False)
+    return group_hits(hits)
 
 
-def group_hits(hits, window: float) -> list[Evidence]:
-    """Consecutive windows naming the same track become one piece of evidence."""
+def group_hits(hits) -> list[Evidence]:
+    """Consecutive windows where one recogniser names the same track become one piece of
+    evidence. Each recogniser keeps its own, so the resolver can see when they agree.
+    hits are (online start, online end, track, score, recogniser)."""
     from setlister.resolve import combine, same_track
 
     hits.sort(key=lambda h: h[0])
     groups: list[Evidence] = []
-    for t, ref, score, src in hits:
+    for start, end, ref, score, src in hits:
         g = next(
             (
                 g
-                for g in reversed(groups[-4:])
-                if same_track(g.track, ref) and t - (g.end or g.start) < 120
+                for g in reversed(groups[-8:])
+                if g.source == src and same_track(g.track, ref) and start - g.end < 120
             ),
             None,
         )
         if g:
-            g.end = t + window
+            g.start = min(g.start, start)
+            g.end = max(g.end, end)
             g.confidence = combine(g.confidence, score * 0.6)
         else:
             groups.append(
                 Evidence(
-                    track=ref, source=src, confidence=round(score * 0.6, 3), start=t, end=t + window
+                    track=ref, source=src, confidence=round(score * 0.6, 3), start=start, end=end
                 )
             )
     return groups
@@ -414,6 +649,7 @@ def enrich(entry: Entry, cfg: Config) -> None:
     from setlister.identify import musicbrainz
     from setlister.links import discogs, find_links
     from setlister.notes import write_note
+    from setlister.resolve import add_sample
 
     facts: dict = {}
     known = []
@@ -421,6 +657,8 @@ def enrich(entry: Entry, cfg: Config) -> None:
     if rec:
         f, known = musicbrainz.facts_and_links(rec)
         facts.update(f)
+        for t in musicbrainz.sampled(rec):
+            add_sample(entry, t, "MusicBrainz")
         entry.note_sources.append("MusicBrainz")
     links = find_links(
         entry.track,
@@ -441,6 +679,9 @@ def enrich(entry: Entry, cfg: Config) -> None:
             entry.note_sources.append("Discogs")
         except Exception as e:
             log.debug("discogs facts: %s", e)
+    heard = [s.track.display for s in entry.samples if s.source != "MusicBrainz"]
+    if heard:
+        facts["possible_sample_heard_in_mix"] = heard
     if entry.track.label:
         facts.setdefault("label_from_file_tags", entry.track.label)
     entry.note, how = write_note(entry.track, facts, cfg.notes)

@@ -64,6 +64,13 @@ def run(
     out: Annotated[
         Path | None, typer.Option("--out", help="Output directory (default: out/)")
     ] = None,
+    llm_notes: Annotated[
+        bool | None,
+        typer.Option(
+            "--llm-notes/--no-llm-notes",
+            help="Write track notes with an LLM (slow locally; off by default)",
+        ),
+    ] = None,
     skip_doctor: Annotated[bool, typer.Option(help="Don't check configuration first")] = False,
     config: ConfigOpt = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
@@ -79,6 +86,8 @@ def run(
     cfg, _ = load_config(config)
     if out:
         cfg.output.directory = out
+    if llm_notes is not None:
+        cfg.notes.llm = llm_notes
     if not skip_doctor and not render(run_checks(cfg, network=not offline)):
         console.print("[red]Fix the required items above, then run again.[/]")
         raise typer.Exit(2)
@@ -96,6 +105,23 @@ def run(
         f"[green]Done:[/] {named} tracks identified, {len(sl.entries) - named} unknown. "
         f"See {outdir}/README.md for how to publish."
     )
+
+
+@app.command()
+def render(
+    setlist_json: Annotated[Path, typer.Argument(help="A setlist.json from an earlier run")],
+    config: ConfigOpt = None,
+) -> None:
+    """Rewrite the paste files and tracklist.md from an (edited) setlist.json, no audio work."""
+    from setlister.models import Setlist
+    from setlister.output import write_all
+
+    cfg, _ = load_config(config)
+    sl = Setlist.model_validate_json(setlist_json.read_text())
+    out = write_all(
+        sl, setlist_json.parent, cfg.output.min_confidence_to_name, sites=cfg.links.sites
+    )
+    console.print(f"wrote {out}")
 
 
 @app.command()

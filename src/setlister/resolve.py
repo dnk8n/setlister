@@ -5,6 +5,14 @@ Rules, in plain words:
   * When two different tracks claim the same stretch, the more confident one wins and the
     other becomes a "contender" for that stretch.
   * Overlapping neighbours (a DJ transition) are split at the middle of the overlap.
+  * Two independent systems agreeing on a track is strong evidence: two of Shazam, AcoustID
+    and a local file match, or a recogniser naming a track the DJ's history says was played.
+    Such rows get at least `CONSENSUS` confidence and no short-play penalty.
+  * Recogniser hits on fan mashups ('A x B x C', 'bootleg', 'blend') count for half.
+  * A detection inside a track's stretch whose title is that track's title by another
+    artist is the sample source, not a separate track: it becomes a footnote.
+  * Detections spanning a minute or less are heavily penalised (DJs rarely play a track that
+    briefly), and named rows that end up below `min_confidence` are left out of the list.
   * A gap of more than `min_gap` seconds that nothing explains becomes an "ID" row, listing
     whatever weak guesses fell inside it.
   * DJ software histories are chronological, so placements of history tracks must keep that
@@ -13,18 +21,37 @@ Rules, in plain words:
 
 from __future__ import annotations
 
-from setlister.models import Entry, Evidence, TrackRef
-from setlister.textnorm import similarity
+import re
+
+from setlister.models import Entry, Evidence, Sample, Source, TrackRef
+from setlister.textnorm import norm, similarity
 
 SAME_TRACK = 0.8
+MIN_ROW_SECONDS = 20.0
+SHORT_PLAY = 60.0  # seconds; a detection this short is heavily penalised
+SHORT_PLAY_FULL = 120.0  # no penalty from here on
+SHORT_PLAY_FACTOR = 0.3
+AUDIO_SOURCES = {Source.SHAZAM, Source.ACOUSTID, Source.LOCAL_MATCH, Source.ORIGINAL_SET}
+RECOGNISERS = {Source.SHAZAM, Source.ACOUSTID}
+MASHUP_FACTOR = 0.5
+_MASHUP = re.compile(r"\b(mash ?up|bootleg|blend)\b| x ")
+CONSENSUS = 0.9
 
 
 def same_track(a: TrackRef, b: TrackRef) -> bool:
-    if a.isrc and b.isrc:
-        return a.isrc == b.isrc
-    if a.musicbrainz_recording_id and b.musicbrainz_recording_id:
-        return a.musicbrainz_recording_id == b.musicbrainz_recording_id
-    return similarity(a.display, b.display) >= SAME_TRACK
+    """Same recording? IDs decide when they agree; otherwise compare names leniently, since
+    sources credit artists differently ('Pepe Bradock' vs 'Pépé Bradock & The Grand Brûlé's
+    Choir'). Different ISRCs don't prove different tracks (re-releases get new ones)."""
+    if a.isrc and a.isrc == b.isrc:
+        return True
+    if a.musicbrainz_recording_id and a.musicbrainz_recording_id == b.musicbrainz_recording_id:
+        return True
+    if similarity(a.display, b.display) >= SAME_TRACK:
+        return True
+    if not (a.title and b.title) or similarity(a.title, b.title) < 0.85:
+        return False
+    ta, tb = set(norm(a.artist).split()), set(norm(b.artist).split())
+    return bool(ta & tb) or not ta or not tb
 
 
 def combine(c1: float, c2: float) -> float:
@@ -67,8 +94,27 @@ def resolve(
     duration: float | None,
     min_gap: float = 75.0,
     max_contenders: int = 3,
+    min_confidence: float = 0.5,
+    rejected: list[Entry] | None = None,
+    clip: bool = False,
+    played: list[TrackRef] | None = None,
 ) -> list[Entry]:
-    timed = [e for e in evidence if e.start is not None]
+    """Evidence -> setlist rows. Named rows below `min_confidence` (after the short-play
+    penalty) are left out of the list and appended to `rejected`, if given.
+
+    `clip` is for highlight reels: every piece is seconds long by design, so there is no
+    short-play penalty and rows only a few seconds long are kept. `played` is the DJ's history
+    (untimed): a recogniser naming one of those tracks counts as agreement."""
+    min_row = 3.0 if clip else MIN_ROW_SECONDS
+    if clip:
+        min_gap = min(min_gap, 10.0)
+    timed = [
+        e.model_copy(update={"confidence": round(e.confidence * MASHUP_FACTOR, 3)})
+        if e.source in RECOGNISERS and is_mashup(e.track)
+        else e
+        for e in evidence
+        if e.start is not None
+    ]
     timed.sort(key=lambda e: e.confidence, reverse=True)
     entries: list[Entry] = []
     weak: list[Evidence] = []
@@ -105,9 +151,22 @@ def resolve(
                 )
             )
 
+    _attach_samples(entries, weak)
+    for entry in entries:
+        agreed = consensus(entry, played)
+        factor = 1.0 if clip or agreed else short_play_factor(entry, duration)
+        entry.confidence = round(entry.confidence * factor, 3)
+        if agreed:
+            entry.confidence = max(entry.confidence, CONSENSUS)
+    dropped = [e for e in entries if e.confidence < min_confidence]
+    entries = [e for e in entries if e.confidence >= min_confidence]
+    if rejected is not None:
+        rejected.extend(sorted(dropped, key=lambda x: x.start))
+
     entries.sort(key=lambda x: x.start)
     _split_transitions(entries)
     entries = _fill_gaps(entries, duration, min_gap)
+    entries = _drop_slivers(entries, min_row)
 
     for w in weak:
         for entry in entries:
@@ -119,6 +178,101 @@ def resolve(
     for entry in entries:
         entry.contenders = entry.contenders[:max_contenders]
     return entries
+
+
+def is_mashup(track: TrackRef) -> bool:
+    """'Mercy x Show Me Love x Feel Just Right': a fan mashup that Shazam sometimes prefers
+    over the record actually playing. Recogniser hits like that count for half."""
+    return bool(_MASHUP.search(f" {track.title.lower()} "))
+
+
+def consensus(entry: Entry, played: list[TrackRef] | None = None) -> bool:
+    """Did two independent systems name this track: two audio systems, or one plus the DJ's
+    own history?"""
+    heard = AUDIO_SOURCES.intersection(entry.sources)
+    if len(heard) >= 2:
+        return True
+    return bool(heard) and any(same_track(entry.track, t) for t in played or [])
+
+
+def _base_title(title: str) -> str:
+    """'Never Grow Old (Re-plant)' -> 'never grow old'."""
+    return norm(re.sub(r"[\(\[].*?[\)\]]", " ", title))
+
+
+def is_sample_of(source: TrackRef, track: TrackRef) -> bool:
+    """Same title, different artist: Aretha Franklin's 'Never Grow Old' inside Floorplan's
+    'Never Grow Old (Re-plant)'."""
+    a, b = _base_title(source.title), _base_title(track.title)
+    if not a or a != b:
+        return False
+    sa, sb = set(norm(source.artist).split()), set(norm(track.artist).split())
+    return bool(sa) and not (sa & sb)
+
+
+def _attach_samples(entries: list[Entry], weak: list[Evidence]) -> None:
+    """Weaker detections near a track that are its sample source become footnotes."""
+    for e in sorted(entries, key=lambda x: x.confidence, reverse=True):
+        if e not in entries:
+            continue
+        lo, hi = e.start - 30, (e.end if e.end is not None else e.start + 60) + 30
+        for other in [x for x in entries if x is not e and x.confidence <= e.confidence]:
+            if lo <= other.start <= hi and is_sample_of(other.track, e.track):
+                add_sample(e, other.track)
+                entries.remove(other)
+        for w in list(weak):
+            if w.start is not None and lo <= w.start <= hi and is_sample_of(w.track, e.track):
+                add_sample(e, w.track)
+                weak.remove(w)
+
+
+def add_sample(entry: Entry, track: TrackRef, source: str = "heard in the mix") -> None:
+    """Add a footnote once; a MusicBrainz relation outranks a recogniser's guess."""
+    for s in entry.samples:
+        if same_track(s.track, track):
+            if source == "MusicBrainz":
+                s.source = source
+            return
+    entry.samples.append(Sample(track=track.model_copy(), source=source))
+
+
+def short_play_factor(entry: Entry, duration: float | None) -> float:
+    """DJs rarely play a track for a minute or less, so a detection that short is probably a
+    mismatch: x0.3 at <= 60 s, rising linearly to x1 at 2 min. Rows touching the start or end
+    of the recording are exempt, because the recording may have cut the play short."""
+    end = entry.end if entry.end is not None else entry.start + 60
+    at_edge = entry.start <= 5 or (duration is not None and end >= duration - 5)
+    span = end - entry.start
+    if at_edge or span >= SHORT_PLAY_FULL:
+        return 1.0
+    if span <= SHORT_PLAY:
+        return SHORT_PLAY_FACTOR
+    return SHORT_PLAY_FACTOR + (1 - SHORT_PLAY_FACTOR) * (span - SHORT_PLAY) / (
+        SHORT_PLAY_FULL - SHORT_PLAY
+    )
+
+
+def _drop_slivers(entries: list[Entry], min_len: float = MIN_ROW_SECONDS) -> list[Entry]:
+    """Rows shorter than `min_len` (YouTube chapters need >= 10 s, and a play that short is
+    noise) are folded into a neighbour; a named sliver becomes that neighbour's contender."""
+    out: list[Entry] = []
+    for e in entries:
+        length = (e.end if e.end is not None else e.start + min_len) - e.start
+        if length >= min_len or not out and len(entries) == 1:
+            out.append(e)
+            continue
+        target = out[-1] if out else None
+        if target is None:
+            continue  # handled below: the next row will start at 0
+        target.end = e.end if e.end is not None else target.end
+        if not e.is_unknown and not same_track(target.track, e.track):
+            target.contenders.append(e.track)
+    if out and entries and out[0].start > entries[0].start:
+        first = entries[0]
+        if not first.is_unknown and not same_track(out[0].track, first.track):
+            out[0].contenders.insert(0, first.track)
+        out[0].start = entries[0].start
+    return out
 
 
 def _fill(dst: TrackRef, src: TrackRef) -> None:

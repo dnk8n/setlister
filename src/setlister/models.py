@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class TrackRef(BaseModel):
@@ -21,10 +21,19 @@ class TrackRef(BaseModel):
     bpm: float | None = None
     key: str | None = None
     duration: float | None = None
-    path: str | None = None  # local file, e.g. from a rekordbox history
+    # Local file (e.g. from a rekordbox history). Never written to output: it reveals the
+    # DJ's own folders, and setlist.json may be shared.
+    path: str | None = Field(default=None, exclude=True)
     musicbrainz_recording_id: str | None = None
     isrc: str | None = None
     discogs_release_id: str | None = None
+
+    @model_validator(mode="after")
+    def _tidy(self) -> TrackRef:
+        from setlister.textnorm import tidy_artist_title
+
+        self.artist, self.title = tidy_artist_title(self.artist, self.title)
+        return self
 
     @property
     def display(self) -> str:
@@ -46,6 +55,7 @@ class Source(StrEnum):
     LOCAL_MATCH = "local_match"  # local audio file matched against the recording
     ACOUSTID = "acoustid"
     SHAZAM = "shazam"
+    ORIGINAL_SET = "original_set"  # the full set's tracklist, for a reel cut from it
     MANUAL = "manual"
 
 
@@ -65,6 +75,14 @@ class Link(BaseModel):
     exact: bool = False  # False = a search URL, True = a page for this exact track/release
 
 
+class Sample(BaseModel):
+    """Material this track samples. `source` says how we know: "MusicBrainz" (a curated
+    relation) or "heard in the mix" (a recogniser named it inside this track's stretch)."""
+
+    track: TrackRef
+    source: str
+
+
 class Entry(BaseModel):
     start: float
     end: float | None = None
@@ -72,6 +90,7 @@ class Entry(BaseModel):
     confidence: float
     sources: list[Source] = []
     contenders: list[TrackRef] = []  # alternatives when unsure
+    samples: list[Sample] = []
     links: list[Link] = []
     note: str | None = None
     note_sources: list[str] = []
@@ -86,5 +105,6 @@ class Setlist(BaseModel):
     title: str = ""
     duration: float | None = None
     entries: list[Entry] = []
+    rejected: list[Entry] = []  # detections too weak for the list (shown separately)
     offset_note: str | None = None  # how the online version maps onto the original
     generated_by: str = "setlister"
