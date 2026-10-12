@@ -653,7 +653,11 @@ def enrich(entry: Entry, cfg: Config) -> None:
 
     facts: dict = {}
     known = []
-    rec = musicbrainz.find_recording(entry.track)
+    try:
+        rec = musicbrainz.find_recording(entry.track)
+    except Exception as e:  # one bad lookup must not sink the run
+        log.warning("MusicBrainz lookup failed for %s: %s", entry.track.display, e)
+        rec = None
     if rec:
         f, known = musicbrainz.facts_and_links(rec)
         facts.update(f)

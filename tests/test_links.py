@@ -135,3 +135,62 @@ def test_mashups_and_sped_up_rips_are_never_used(monkeypatch):
     assert video_sites.find(sosa, "soundcloud").url == "ok"
     monkeypatch.setattr(video_sites, "search", lambda q, site, n: [mashup, padded])
     assert video_sites.find(sosa, "soundcloud") is None
+
+
+def test_musicbrainz_prefers_the_ep_over_a_dj_mix_compilation():
+    from setlister.identify.musicbrainz import facts_and_links
+
+    rec = {
+        "id": "rec1",
+        "title": "Replica",
+        "artist-credit-phrase": "Asa Tate",
+        "release-list": [
+            {
+                "title": "Some DJ Mix",
+                "date": "2019-01-01",
+                "status": "Official",
+                "release-group": {
+                    "id": "mix",
+                    "primary-type": "Broadcast",
+                    "secondary-type-list": ["DJ-mix", "Live"],
+                },
+            },
+            {
+                "title": "Replica EP",
+                "date": "2020-05-01",
+                "status": "Official",
+                "release-group": {"id": "ep", "primary-type": "EP"},
+            },
+        ],
+    }
+    facts, links = facts_and_links(rec)
+    assert links[0].url == "https://musicbrainz.org/release-group/ep"
+    assert facts["releases"][0] == "Replica EP" and facts["release_type"] == "EP"
+    assert facts["first_release_date"] == "2020-05-01"  # the mix's earlier date is not the release
+
+
+def test_musicbrainz_includes_are_ones_the_client_accepts():
+    import musicbrainzngs.musicbrainz as m
+
+    from setlister.identify import musicbrainz
+
+    assert set(musicbrainz.RECORDING_INCLUDES) <= set(m.VALID_INCLUDES["recording"])
+    assert set(musicbrainz.RELEASE_INCLUDES) <= set(m.VALID_BROWSE_INCLUDES["release"])
+
+
+def test_recording_lookup_brings_release_groups(monkeypatch):
+    from setlister.identify import musicbrainz
+
+    monkeypatch.setattr(musicbrainz, "_throttle", lambda: None)
+    monkeypatch.setattr(
+        musicbrainz.mb,
+        "get_recording_by_id",
+        lambda rid, includes: {"recording": {"id": rid, "release-list": [{"title": "x"}]}},
+    )
+    monkeypatch.setattr(
+        musicbrainz.mb,
+        "browse_releases",
+        lambda **kw: {"release-list": [{"title": "EP", "release-group": {"primary-type": "EP"}}]},
+    )
+    rec = musicbrainz._lookup("r1")
+    assert rec["release-list"][0]["release-group"]["primary-type"] == "EP"

@@ -61,7 +61,7 @@ def test_low_confidence_rows_are_left_out_of_the_list():
     text = description_text(Setlist(url="u", entries=entries, duration=600), min_conf=0.5)
     lines = text.splitlines()
     assert lines[1].startswith("00:00 A - One")
-    assert lines[2] == "05:00 ID"
+    assert "05:00-10:00 ID" in text.split("Unsure")[1]
     assert "Two" not in text and [r.track.title for r in rejected] == ["Two"]
 
 
