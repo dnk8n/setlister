@@ -102,11 +102,13 @@ def description_text(
         if any(links.values()):
             body += ["", "Links:"]
             body += [
-                f"{n}. " + " ".join(url for _, url in links[n]) for n in sorted(links) if links[n]
+                f"{_clean(named[n - 1].track.display)}: " + " ".join(url for _, url in links[n])
+                for n in sorted(links)
+                if links[n]
             ]
         if samples:
             body += ["", "Samples:"]
-            body += [f"{n}. {samples[n]}" for n in sorted(samples)]
+            body += [samples[n] for n in sorted(samples)]
         if unsure:
             body += ["", UNSURE_INTRO, *unsure]
         body += ["", FOOTER]
@@ -123,7 +125,8 @@ def description_text(
     return text
 
 
-UNSURE_INTRO = "Unsure (often still the track before, a blend or a mic break):"
+UNSURE_WHY = "often still the track before, a blend or a mic break"
+UNSURE_INTRO = f"Unsure ({UNSURE_WHY}):"
 
 
 def track_links(entry: Entry, sites: list[str]) -> list[tuple[str, str]]:
@@ -265,7 +268,7 @@ def markdown(sl: Setlist, min_conf: float, sites: list[str] | None = None) -> st
             out += ["Other candidates: " + "; ".join(c.display for c in e.contenders), ""]
     unsure = unsure_lines(sl, hours)
     if unsure:
-        out += ["## Unsure", "", UNSURE_INTRO.removesuffix(":") + ".", ""]
+        out += ["## Unsure", "", UNSURE_WHY.capitalize() + ".", ""]
         out += [f"- {line}" for line in unsure]
         out.append("")
     if sl.rejected:

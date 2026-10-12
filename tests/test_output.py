@@ -35,7 +35,7 @@ def test_youtube_text_names_platforms_per_track_and_lists_their_urls():
     assert check_paste(text, "youtube") == []
     lines = text.splitlines()
     assert lines[1] == "0:00:00 Artist 0 - Track (0) (Bandcamp | Discogs)"  # chapters at zero
-    assert "1. https://b.example/1 https://d.example/" in text
+    assert "Artist 0 - Track (0): https://b.example/1 https://d.example/" in text
     assert "<" not in text and ">" not in text
 
 
@@ -61,8 +61,8 @@ def test_links_are_dropped_from_least_certain_tracks_to_fit():
     sl = setlist(n=40, url_len=120)
     text = description_text(sl, limit=4000, sites=["discogs"])
     assert len(text) <= 4000 and check_paste(text, "soundcloud") == []
-    assert "40. https://d.example" in text  # most certain keeps its link
-    assert "\n1. https://d.example" not in text
+    assert "Artist 39 - Track (39): https://d.example" in text  # most certain keeps it
+    assert "Artist 0 - Track (0): " not in text
     assert "Artist 0 - Track (0) (Discogs)" not in text  # names follow the links left
 
 
@@ -105,8 +105,7 @@ def test_sample_footnotes_are_listed_and_dropped_before_links():
     ]
     text = description_text(sl, sites=["bandcamp"])
     assert (
-        "Samples:\n2. Artist 1 - Track (1) samples Aretha Franklin - Never Grow Old (possibly"
-        in text
+        "Samples:\nArtist 1 - Track (1) samples Aretha Franklin - Never Grow Old (possibly" in text
     )
     tight = description_text(sl, limit=len(text) - 1, sites=["bandcamp"])
     assert "Samples:" not in tight and tight.count("https://b.example/1") == 3
