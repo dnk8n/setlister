@@ -35,27 +35,14 @@ def _throttle() -> None:
 
 
 def find_recording(track: TrackRef) -> dict | None:
-    includes = [
-        "artists",
-        "releases",
-        "release-groups",
-        "url-rels",
-        "recording-rels",
-        "isrcs",
-        "tags",
-    ]
     try:
         if track.musicbrainz_recording_id:
-            _throttle()
-            return mb.get_recording_by_id(track.musicbrainz_recording_id, includes=includes)[
-                "recording"
-            ]
+            return _lookup(track.musicbrainz_recording_id)
         if track.isrc:
             _throttle()
             recs = mb.get_recordings_by_isrc(track.isrc, includes=["artists"]).get("isrc", {})
             for r in recs.get("recording-list", [])[:1]:
-                _throttle()
-                return mb.get_recording_by_id(r["id"], includes=includes)["recording"]
+                return _lookup(r["id"])
         if track.title:
             _throttle()
             res = mb.search_recordings(recording=track.title, artist=track.artist, limit=10)
@@ -64,11 +51,29 @@ def find_recording(track: TrackRef) -> dict | None:
                 # Several recordings often match (EP, single, DJ-mix compilation): prefer one
                 # on a proper EP/single/album, then the earliest, so runs agree.
                 best = min(matches, key=lambda r: (_release_rank(best_release(r)), _first_date(r)))
-                _throttle()
-                return mb.get_recording_by_id(best["id"], includes=includes)["recording"]
+                return _lookup(best["id"])
     except mb.WebServiceError as e:
         log.debug("musicbrainz: %s", e)
     return None
+
+
+RECORDING_INCLUDES = ["artists", "releases", "url-rels", "recording-rels", "isrcs", "tags"]
+RELEASE_INCLUDES = ["release-groups"]
+
+
+def _lookup(recording_id: str) -> dict:
+    """The recording, with its releases' release groups (EP, single, DJ-mix...). A recording
+    lookup can't include release groups, so its releases are browsed for them."""
+    _throttle()
+    rec = mb.get_recording_by_id(recording_id, includes=RECORDING_INCLUDES)["recording"]
+    try:
+        _throttle()
+        res = mb.browse_releases(recording=recording_id, includes=RELEASE_INCLUDES, limit=100)
+        if res.get("release-list"):
+            rec["release-list"] = res["release-list"]
+    except mb.WebServiceError as e:
+        log.debug("musicbrainz releases: %s", e)
+    return rec
 
 
 def is_same(rec: dict, track: TrackRef) -> bool:
