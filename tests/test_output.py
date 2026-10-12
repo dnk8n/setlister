@@ -30,20 +30,40 @@ def setlist(n=12, url_len=60):
     return Setlist(url="u", duration=n * 300 + 400, entries=entries)
 
 
-def test_youtube_text_passes_its_own_checks_and_has_one_link_per_track():
+def test_youtube_text_names_platforms_per_track_and_lists_their_urls():
     text = description_text(setlist(), sites=["bandcamp", "discogs"])
     assert check_paste(text, "youtube") == []
-    assert text.splitlines()[1].startswith("0:00:00 ")  # chapters start at zero
-    assert text.count("https://b.example/1") == 12 and "d.example" not in text
+    lines = text.splitlines()
+    assert lines[1] == "0:00:00 Artist 0 - Track (0) (Bandcamp | Discogs)"  # chapters at zero
+    assert "1. https://b.example/1 https://d.example/" in text
     assert "<" not in text and ">" not in text
+
+
+def test_ids_leave_the_tracklist_for_an_unsure_paragraph():
+    sl = setlist(n=3)
+    sl.entries.insert(
+        2,
+        Entry(
+            start=500,
+            end=560,
+            track=TrackRef(),
+            confidence=0,
+            contenders=[TrackRef(artist="X", title="Maybe")],
+        ),
+    )
+    text = description_text(sl, sites=["bandcamp"])
+    tracklist = text.split("\n\n")[0]
+    assert "ID" not in tracklist
+    assert "08:20-09:20 ID? (X - Maybe)" in text.split("Unsure")[1]
 
 
 def test_links_are_dropped_from_least_certain_tracks_to_fit():
     sl = setlist(n=40, url_len=120)
     text = description_text(sl, limit=4000, sites=["discogs"])
     assert len(text) <= 4000 and check_paste(text, "soundcloud") == []
-    assert "Artist 39 - Track (39): https://d.example" in text  # most certain keeps its link
-    assert "Artist 0 - Track (0): " not in text
+    assert "40. https://d.example" in text  # most certain keeps its link
+    assert "\n1. https://d.example" not in text
+    assert "Artist 0 - Track (0) (Discogs)" not in text  # names follow the links left
 
 
 def test_mixcloud_lines_are_artist_title_hhmmss_without_unknowns():
@@ -106,8 +126,8 @@ def test_short_rows_share_a_chapter_so_youtube_keeps_chapters():
         ],
     )
     assert chapters(sl) == [
-        (0.0, "A - One"),
-        (52, "Floorplan - Never Grow Old / Gerd Janson - London Town / B - Two"),
+        (0.0, 1, "A - One"),
+        (52, 2, "Floorplan - Never Grow Old / Gerd Janson - London Town / B - Two"),
     ]
     assert check_paste(description_text(sl), "youtube") == [
         "fewer than 3 timestamps, so no chapters"

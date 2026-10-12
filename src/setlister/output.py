@@ -21,6 +21,7 @@ SITE_NAMES = {
     "musicbrainz": "MusicBrainz",
     "beatport": "Beatport",
 }
+PLATFORM_ORDER = ["bandcamp", "discogs", "musicbrainz", "soundcloud", "youtube", "beatport"]
 
 
 def slug(text: str, max_len: int = 50) -> str:
@@ -60,10 +61,7 @@ def label(entry: Entry, min_conf: float) -> str:
 # article 360004053959).
 PLATFORMS = {"youtube": 5000, "soundcloud": 4000}
 YOUTUBE_MIN_CHAPTER = 10.0
-FOOTER = (
-    "Tracklist by setlister (https://github.com/dnk8n/setlister). "
-    "ID = not identified yet; corrections welcome."
-)
+FOOTER = "Tracklist by setlister (https://github.com/dnk8n/setlister). Corrections welcome."
 
 
 def _clean(text: str) -> str:
@@ -71,56 +69,87 @@ def _clean(text: str) -> str:
     return text.replace("<", "(").replace(">", ")").replace("\n", " ").strip()
 
 
-def _best_link(entry: Entry, sites: list[str]) -> str | None:
-    by_site = {link.site: link.url for link in entry.links if link.exact}
-    for site in sites + list(by_site):
-        if site in by_site:
-            return by_site[site]
-    return None
-
-
 def description_text(
     sl: Setlist, min_conf: float = 0.5, *, limit: int = 5000, sites: list[str] | None = None
 ) -> str:
-    """Timestamped list (YouTube chapters) followed by one confirmed link per track.
+    """Timestamped list (YouTube chapters) with the platforms each track was found on, then
+    the links themselves, then the unsure stretches.
 
-    Links sit in their own section so chapter titles stay short and clean. If the text would
-    exceed `limit`, links are dropped from the least certain tracks first.
+    Plain-text platforms can't make "Bandcamp" clickable, so the names go next to the track
+    and the URLs (which become links) in a block below. If the text would exceed `limit`,
+    sample footnotes go first, then MusicBrainz links, then links of the least certain tracks.
     """
     sites = sites or list(SITE_NAMES)
     hours = bool(sl.duration and sl.duration >= 3600)
-    rows = [
-        f"{format_timestamp(start, force_hours=hours)} {_clean(name)}"
-        for start, name in chapters(sl)
-    ]
-    numbered = [
-        (i, e, _best_link(e, sites)) for i, e in enumerate(sl.entries, 1) if not e.is_unknown
-    ]
-    links = {i: url for i, _, url in numbered if url}
-    samples = {i: sample_line(e) for i, e, _ in numbered if e.samples}
-    # Over the limit? Sample footnotes go first, then links, least certain tracks first.
-    order = [i for _, i in sorted((e.confidence, i) for i, e, _ in numbered)]
-    drop = [(samples, i) for i in order if i in samples] + [(links, i) for i in order if i in links]
+    named = [e for e in sl.entries if not e.is_unknown]
+    links = {n: track_links(e, sites) for n, e in enumerate(named, 1)}
+    samples = {n: sample_line(e) for n, e in enumerate(named, 1) if e.samples}
+    by_certainty = [n for _, n in sorted((e.confidence, n) for n, e in enumerate(named, 1))]
+    drops = [("sample", n, None) for n in by_certainty if n in samples]
+    drops += [("link", n, "musicbrainz") for n in by_certainty]
+    drops += [("link", n, site) for n in by_certainty for site in reversed(sites)]
+    unsure = unsure_lines(sl, hours)
 
     def build() -> str:
+        rows = []
+        for start, n, label in chapters(sl):
+            names = " | ".join(SITE_NAMES.get(s, s) for s, _ in links.get(n, []))
+            rows.append(
+                f"{format_timestamp(start, force_hours=hours)} {_clean(label)}"
+                + (f" ({names})" if names else "")
+            )
         body = ["Tracklist:", *rows]
-        if links:
+        if any(links.values()):
             body += ["", "Links:"]
             body += [
-                f"{i}. {_clean(e.track.display)}: {links[i]}" for i, e, _ in numbered if i in links
+                f"{n}. " + " ".join(url for _, url in links[n]) for n in sorted(links) if links[n]
             ]
         if samples:
             body += ["", "Samples:"]
-            body += [f"{i}. {samples[i]}" for i, _, _ in numbered if i in samples]
+            body += [f"{n}. {samples[n]}" for n in sorted(samples)]
+        if unsure:
+            body += ["", UNSURE_INTRO, *unsure]
         body += ["", FOOTER]
         return "\n".join(body) + "\n"
 
     text = build()
-    while len(text) > limit and drop:
-        table, i = drop.pop(0)
-        table.pop(i)
+    while len(text) > limit and drops:
+        kind, n, site = drops.pop(0)
+        if kind == "sample":
+            samples.pop(n, None)
+        else:
+            links[n] = [(s, u) for s, u in links[n] if s != site]
         text = build()
     return text
+
+
+UNSURE_INTRO = "Unsure (often still the track before, a blend or a mic break):"
+
+
+def track_links(entry: Entry, sites: list[str]) -> list[tuple[str, str]]:
+    """Confirmed (site, url) pairs in platform order."""
+    by_site: dict[str, str] = {}
+    for link in entry.links:
+        if link.exact:
+            by_site.setdefault(link.site, link.url)
+    order = [s for s in PLATFORM_ORDER if s in sites or s == "musicbrainz"]
+    return [(s, by_site[s]) for s in order if s in by_site]
+
+
+def unsure_lines(sl: Setlist, hours: bool) -> list[str]:
+    """Unidentified stretches, kept out of the tracklist: most are not a new track."""
+    out = []
+    for e in sl.entries:
+        if not e.is_unknown:
+            continue
+        end = f"-{format_timestamp(e.end, force_hours=hours)}" if e.end else ""
+        guess = (
+            " (" + " / ".join(_clean(c.display) for c in e.contenders) + ")" if e.contenders else ""
+        )
+        out.append(
+            f"{format_timestamp(e.start, force_hours=hours)}{end} ID{'?' if guess else ''}{guess}"
+        )
+    return out
 
 
 def sample_line(entry: Entry) -> str:
@@ -133,24 +162,31 @@ def sample_line(entry: Entry) -> str:
     return _clean(f"{entry.track.display} samples " + "; ".join(parts))
 
 
-def chapters(sl: Setlist) -> list[tuple[float, str]]:
-    """(start, label) per chapter. YouTube drops every chapter if one is under 10 s (reels
-    cut every few seconds), so a short row shares a chapter with the next: 'A / B'."""
-    out: list[tuple[float, str]] = []
-    for i, e in enumerate(sl.entries):
-        start = 0.0 if i == 0 else e.start  # chapters must start at 00:00
+def chapters(sl: Setlist) -> list[tuple[float, int | None, str]]:
+    """(start, track number, label) per chapter, identified tracks only: an unidentified
+    stretch stays part of the chapter before it. YouTube needs the first chapter at 00:00
+    and drops every chapter if one is under 10 s (reels cut every few seconds), so a short
+    row shares a chapter with the next: 'A / B'."""
+    named = [e for e in sl.entries if not e.is_unknown]
+    out: list[tuple[float, int | None, str]] = []
+    if named and named[0].start >= YOUTUBE_MIN_CHAPTER:
+        out.append((0.0, None, "Intro"))
+    for n, e in enumerate(named, 1):
+        start = 0.0 if not out else e.start
         if out and start - out[-1][0] < YOUTUBE_MIN_CHAPTER:
-            out[-1] = (out[-1][0], _join(out[-1][1], short_label(e)))
+            first, num, label = out[-1]
+            out[-1] = (first, num if num is not None else n, _join(label, short_label(e)))
         else:
-            out.append((start, short_label(e)))
+            out.append((start, n, short_label(e)))
     if len(out) > 1 and sl.duration and sl.duration - out[-1][0] < YOUTUBE_MIN_CHAPTER:
-        last = out.pop()
-        out[-1] = (out[-1][0], _join(out[-1][1], last[1]))
+        _, num, label = out.pop()
+        first, prev, prev_label = out[-1]
+        out[-1] = (first, prev if prev is not None else num, _join(prev_label, label))
     return out
 
 
 def _join(a: str, b: str) -> str:
-    return a if b == a or (b == "ID" and a.endswith("ID")) else f"{a} / {b}"
+    return a if b == a else f"{a} / {b}"
 
 
 def mixcloud_tracklist(sl: Setlist) -> str:
@@ -191,35 +227,31 @@ def check_paste(text: str, platform: str) -> list[str]:
     return problems
 
 
-def markdown(sl: Setlist, min_conf: float) -> str:
+def markdown(sl: Setlist, min_conf: float, sites: list[str] | None = None) -> str:
+    sites = sites or list(SITE_NAMES)
     hours = bool(sl.duration and sl.duration >= 3600)
     out = [f"# {sl.title or sl.url}", "", f"Source: {sl.url}", ""]
     if sl.offset_note:
         out += [f"> {sl.offset_note}", ""]
-    for i, e in enumerate(sl.entries, 1):
+    named = [e for e in sl.entries if not e.is_unknown]
+    for i, e in enumerate(named, 1):
         end = f"–{format_timestamp(e.end, force_hours=hours)}" if e.end else ""
+        found = " | ".join(
+            f"[{SITE_NAMES.get(site, site)}]({url})" for site, url in track_links(e, sites)
+        )
         out.append(
-            f"## {i}. {format_timestamp(e.start, force_hours=hours)}{end} · {label(e, min_conf)}"
+            f"## {i}. {format_timestamp(e.start, force_hours=hours)}{end} · "
+            f"{label(e, min_conf)}" + (f" ({found})" if found else "")
         )
         out.append("")
-        meta = []
-        if not e.is_unknown:
-            meta.append(f"confidence {e.confidence:.0%}")
+        meta = [f"confidence {e.confidence:.0%}"]
         if e.sources:
             meta.append("from " + ", ".join(s.value for s in e.sources))
         if e.track.label:
             meta.append(e.track.label)
         if e.track.year:
             meta.append(str(e.track.year))
-        if meta:
-            out += ["*" + " · ".join(meta) + "*", ""]
-        if e.links:
-            out += [
-                " · ".join(
-                    f"[{SITE_NAMES.get(link.site, link.site)}]({link.url})" for link in e.links
-                ),
-                "",
-            ]
+        out += ["*" + " · ".join(meta) + "*", ""]
         if e.note:
             out += [e.note, ""]
             if e.note_sources:
@@ -229,8 +261,13 @@ def markdown(sl: Setlist, min_conf: float) -> str:
                 "Samples: " + "; ".join(f"{x.track.display} ({x.source})" for x in e.samples),
                 "",
             ]
-        if e.contenders and not e.is_unknown and e.confidence >= min_conf:
+        if e.contenders and e.confidence >= min_conf:
             out += ["Other candidates: " + "; ".join(c.display for c in e.contenders), ""]
+    unsure = unsure_lines(sl, hours)
+    if unsure:
+        out += ["## Unsure", "", UNSURE_INTRO.removesuffix(":") + ".", ""]
+        out += [f"- {line}" for line in unsure]
+        out.append("")
     if sl.rejected:
         out += [
             "## Low-confidence detections (left out of the tracklist)",
@@ -257,6 +294,10 @@ ascending, each chapter at least 10 seconds). If a check failed, `setlister` sai
 when it wrote the files. Every link is a confirmed page for that exact track; tracks
 without one have no link. "Samples" footnotes come from MusicBrainz, or are marked
 "possibly" when a recogniser heard the source inside the track; check those before posting.
+Each track names the platforms it was found on; plain-text descriptions can't make those
+names clickable, so the URLs follow in a "Links" block (clickable in `tracklist.md`).
+Unidentified stretches are not in the tracklist: most are still the track before, a blend
+or a mic break. They are listed under "Unsure" at the end.
 
 | File | Where it goes |
 |---|---|
@@ -312,7 +353,7 @@ def write_all(
         (directory / name).write_text(text)
         for problem in check_paste(text, platform):
             log.warning("%s: %s", name, problem)
-    (directory / "tracklist.md").write_text(markdown(sl, min_conf))
+    (directory / "tracklist.md").write_text(markdown(sl, min_conf, sites))
     (directory / "setlist.json").write_text(sl.model_dump_json(indent=2))
     (directory / "README.md").write_text(INSTRUCTIONS)
     return directory
