@@ -93,12 +93,12 @@ def description_text(
 
     def build() -> str:
         rows = []
-        for start, n, label in chapters(sl):
-            urls = " | ".join(url for _, url in links.get(n, []))
-            rows.append(
-                f"{format_timestamp(start, force_hours=hours)} {_clean(label)}"
-                + (f" ({urls})" if urls else "")
-            )
+        for start, parts in chapters(sl):
+            shown = []
+            for n, label in parts:
+                urls = " | ".join(url for _, url in links.get(n, []))
+                shown.append(_clean(label) + (f" ({urls})" if urls else ""))
+            rows.append(f"{format_timestamp(start, force_hours=hours)} {' / '.join(shown)}")
         body = ["Tracklist:", *rows]
         if samples:
             body += ["", "Samples:"]
@@ -138,6 +138,17 @@ def track_links(entry: Entry, sites: list[str]) -> list[tuple[str, str]]:
     return [(s, by_site[s]) for s in order if s in by_site]
 
 
+def best_rejected(sl: Setlist, gap: Entry) -> Entry | None:
+    """The strongest too-weak detection overlapping an unidentified stretch."""
+    end = gap.end if gap.end is not None else sl.duration or float("inf")
+    inside = [
+        r
+        for r in sl.rejected
+        if not r.is_unknown and r.start < end and (r.end or r.start) >= gap.start
+    ]
+    return max(inside, key=lambda r: r.confidence, default=None)
+
+
 def unsure_lines(sl: Setlist, hours: bool) -> list[str]:
     """Unidentified stretches, kept out of the tracklist: most are not a new track."""
     out = []
@@ -148,8 +159,11 @@ def unsure_lines(sl: Setlist, hours: bool) -> list[str]:
         guess = (
             " (" + " / ".join(_clean(c.display) for c in e.contenders) + ")" if e.contenders else ""
         )
+        weak = best_rejected(sl, e)
+        maybe = f", possibly {_clean(weak.track.display)} ({weak.confidence:.0%})" if weak else ""
         out.append(
-            f"{format_timestamp(e.start, force_hours=hours)}{end} ID{'?' if guess else ''}{guess}"
+            f"{format_timestamp(e.start, force_hours=hours)}{end} "
+            f"ID{'?' if guess else ''}{guess}{maybe}"
         )
     return out
 
@@ -164,31 +178,25 @@ def sample_line(entry: Entry) -> str:
     return _clean(f"{entry.track.display} samples " + "; ".join(parts))
 
 
-def chapters(sl: Setlist) -> list[tuple[float, int | None, str]]:
-    """(start, track number, label) per chapter, identified tracks only: an unidentified
-    stretch stays part of the chapter before it. YouTube needs the first chapter at 00:00
-    and drops every chapter if one is under 10 s (reels cut every few seconds), so a short
-    row shares a chapter with the next: 'A / B'."""
+def chapters(sl: Setlist) -> list[tuple[float, list[tuple[int | None, str]]]]:
+    """(start, [(track number, label), ...]) per chapter, identified tracks only: an
+    unidentified stretch stays part of the chapter before it. YouTube needs the first
+    chapter at 00:00 and drops every chapter if one is under 10 s (reels cut every few
+    seconds), so a short row shares a chapter with the next: 'A / B'."""
     named = [e for e in sl.entries if not e.is_unknown]
-    out: list[tuple[float, int | None, str]] = []
+    out: list[tuple[float, list[tuple[int | None, str]]]] = []
     if named and named[0].start >= YOUTUBE_MIN_CHAPTER:
-        out.append((0.0, None, "Intro"))
+        out.append((0.0, [(None, "Intro")]))
     for n, e in enumerate(named, 1):
         start = 0.0 if not out else e.start
         if out and start - out[-1][0] < YOUTUBE_MIN_CHAPTER:
-            first, num, label = out[-1]
-            out[-1] = (first, num if num is not None else n, _join(label, short_label(e)))
+            out[-1][1].append((n, short_label(e)))
         else:
-            out.append((start, n, short_label(e)))
+            out.append((start, [(n, short_label(e))]))
     if len(out) > 1 and sl.duration and sl.duration - out[-1][0] < YOUTUBE_MIN_CHAPTER:
-        _, num, label = out.pop()
-        first, prev, prev_label = out[-1]
-        out[-1] = (first, prev if prev is not None else num, _join(prev_label, label))
+        _, parts = out.pop()
+        out[-1][1].extend(parts)
     return out
-
-
-def _join(a: str, b: str) -> str:
-    return a if b == a else f"{a} / {b}"
 
 
 def mixcloud_tracklist(sl: Setlist) -> str:

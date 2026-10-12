@@ -124,7 +124,8 @@ class RedactingFilter(logging.Filter):
     """Attach to log handlers so a secret that sneaks into a message is masked."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        record.msg = redact(str(record.msg))
-        if record.args:
-            record.args = tuple(redact(str(a)) for a in record.args)
+        # Format first, then redact the result: redacting the arguments one by one turned
+        # numbers into strings and broke '%d' placeholders.
+        record.msg = redact(record.getMessage())
+        record.args = None
         return True

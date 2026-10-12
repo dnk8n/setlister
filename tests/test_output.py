@@ -56,6 +56,45 @@ def test_ids_leave_the_tracklist_for_an_unsure_paragraph():
     assert "08:20-09:20 ID? (X - Maybe)" in text.split("Unsure")[1]
 
 
+def test_unsure_lines_name_the_best_weak_detection_inside_the_gap():
+    sl = setlist(n=3)
+    sl.entries.insert(2, Entry(start=500, end=560, track=TrackRef(), confidence=0))
+    sl.rejected = [
+        entry(400, "Too", "Early", conf=0.45),  # ends at 700, overlaps
+        entry(510, "Best", "Guess", conf=0.39),
+        Entry(start=900, track=TrackRef(artist="Far", title="Away"), confidence=0.48),
+    ]
+    sl.rejected[0].end = 499
+    text = description_text(sl, sites=["bandcamp"])
+    assert "08:20-09:20 ID, possibly Best - Guess (39%)" in text
+
+
+def test_merged_chapters_keep_each_tracks_own_links():
+    sl = Setlist(
+        url="u",
+        duration=200,
+        entries=[
+            entry(0, "A", "One", links=[("bandcamp", "https://b.example/a")]),
+            entry(60, "B", "Two", links=[("bandcamp", "https://b.example/b")]),
+            entry(64, "C", "Three", links=[("bandcamp", "https://b.example/c")]),
+            entry(120, "D", "Four"),
+        ],
+    )
+    text = description_text(sl, sites=["bandcamp"])
+    assert "01:00 B - Two (https://b.example/b) / C - Three (https://b.example/c)\n" in text
+
+
+def test_left_out_warning_logs_through_the_redacting_filter(caplog):
+    import logging
+
+    from setlister.secrets import RedactingFilter
+
+    caplog.handler.addFilter(RedactingFilter())
+    with caplog.at_level(logging.WARNING, logger="setlister"):
+        description_text(setlist(n=40, url_len=120), limit=4000, sites=["discogs"])
+    assert "to fit 4000 characters, left out:" in caplog.text
+
+
 def test_links_are_dropped_from_least_certain_tracks_to_fit():
     sl = setlist(n=40, url_len=120)
     text = description_text(sl, limit=4000, sites=["discogs"])
@@ -123,8 +162,8 @@ def test_short_rows_share_a_chapter_so_youtube_keeps_chapters():
         ],
     )
     assert chapters(sl) == [
-        (0.0, 1, "A - One"),
-        (52, 2, "Floorplan - Never Grow Old / Gerd Janson - London Town / B - Two"),
+        (0.0, [(1, "A - One")]),
+        (52, [(2, "Floorplan - Never Grow Old"), (3, "Gerd Janson - London Town"), (4, "B - Two")]),
     ]
     assert check_paste(description_text(sl), "youtube") == [
         "fewer than 3 timestamps, so no chapters"
