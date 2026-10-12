@@ -72,12 +72,13 @@ def _clean(text: str) -> str:
 def description_text(
     sl: Setlist, min_conf: float = 0.5, *, limit: int = 5000, sites: list[str] | None = None
 ) -> str:
-    """Timestamped list (YouTube chapters) with the platforms each track was found on, then
-    the links themselves, then the unsure stretches.
+    """Timestamped list (YouTube chapters), each track followed by its confirmed links, then
+    the unsure stretches.
 
-    Plain-text platforms can't make "Bandcamp" clickable, so the names go next to the track
-    and the URLs (which become links) in a block below. If the text would exceed `limit`,
-    sample footnotes go first, then MusicBrainz links, then links of the least certain tracks.
+    Links are raw URLs in platform order, '(url | url)': YouTube shows each as a chip with the
+    site's icon, SoundCloud as a plain link; neither renders link text. If the text would
+    exceed `limit`, sample footnotes go first, then MusicBrainz links, then links of the
+    least certain tracks; what was dropped is logged.
     """
     sites = sites or list(SITE_NAMES)
     hours = bool(sl.duration and sl.duration >= 3600)
@@ -93,19 +94,12 @@ def description_text(
     def build() -> str:
         rows = []
         for start, n, label in chapters(sl):
-            names = " | ".join(SITE_NAMES.get(s, s) for s, _ in links.get(n, []))
+            urls = " | ".join(url for _, url in links.get(n, []))
             rows.append(
                 f"{format_timestamp(start, force_hours=hours)} {_clean(label)}"
-                + (f" ({names})" if names else "")
+                + (f" ({urls})" if urls else "")
             )
         body = ["Tracklist:", *rows]
-        if any(links.values()):
-            body += ["", "Links:"]
-            body += [
-                f"{_clean(named[n - 1].track.display)}: " + " ".join(url for _, url in links[n])
-                for n in sorted(links)
-                if links[n]
-            ]
         if samples:
             body += ["", "Samples:"]
             body += [samples[n] for n in sorted(samples)]
@@ -115,13 +109,18 @@ def description_text(
         return "\n".join(body) + "\n"
 
     text = build()
+    dropped = []
     while len(text) > limit and drops:
         kind, n, site = drops.pop(0)
         if kind == "sample":
             samples.pop(n, None)
-        else:
+            dropped.append(f"samples of {named[n - 1].track.display}")
+        elif any(s == site for s, _ in links[n]):
             links[n] = [(s, u) for s, u in links[n] if s != site]
+            dropped.append(f"{SITE_NAMES.get(site, site)} link of {named[n - 1].track.display}")
         text = build()
+    if dropped:
+        log.warning("to fit %d characters, left out: %s", limit, "; ".join(dropped))
     return text
 
 
@@ -297,8 +296,9 @@ ascending, each chapter at least 10 seconds). If a check failed, `setlister` sai
 when it wrote the files. Every link is a confirmed page for that exact track; tracks
 without one have no link. "Samples" footnotes come from MusicBrainz, or are marked
 "possibly" when a recogniser heard the source inside the track; check those before posting.
-Each track names the platforms it was found on; plain-text descriptions can't make those
-names clickable, so the URLs follow in a "Links" block (clickable in `tracklist.md`).
+Each track is followed by its links in the order Bandcamp, Discogs, MusicBrainz,
+SoundCloud, YouTube. YouTube shows each URL as a chip with the site's icon; `tracklist.md`
+names them ("Bandcamp", ...).
 Unidentified stretches are not in the tracklist: most are still the track before, a blend
 or a mic break. They are listed under "Unsure" at the end.
 

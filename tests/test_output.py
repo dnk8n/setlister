@@ -34,8 +34,7 @@ def test_youtube_text_names_platforms_per_track_and_lists_their_urls():
     text = description_text(setlist(), sites=["bandcamp", "discogs"])
     assert check_paste(text, "youtube") == []
     lines = text.splitlines()
-    assert lines[1] == "0:00:00 Artist 0 - Track (0) (Bandcamp | Discogs)"  # chapters at zero
-    assert "Artist 0 - Track (0): https://b.example/1 https://d.example/" in text
+    assert lines[1].startswith("0:00:00 Artist 0 - Track (0) (https://b.example/1 | https://d.")
     assert "<" not in text and ">" not in text
 
 
@@ -61,9 +60,8 @@ def test_links_are_dropped_from_least_certain_tracks_to_fit():
     sl = setlist(n=40, url_len=120)
     text = description_text(sl, limit=4000, sites=["discogs"])
     assert len(text) <= 4000 and check_paste(text, "soundcloud") == []
-    assert "Artist 39 - Track (39): https://d.example" in text  # most certain keeps it
-    assert "Artist 0 - Track (0): " not in text
-    assert "Artist 0 - Track (0) (Discogs)" not in text  # names follow the links left
+    assert "Artist 39 - Track (39) (https://d.example" in text  # most certain keeps it
+    assert "Artist 0 - Track (0)\n" in text
 
 
 def test_mixcloud_lines_are_artist_title_hhmmss_without_unknowns():
